@@ -5,30 +5,32 @@ import hashlib
 import json
 import os
 
-# 从 GitHub Secrets 读取 API Key（安全）
-API_KEY = os.environ.get("GATEIO_API_KEY", "YOUR_KEY_HERE")
-API_SECRET = os.environ.get("GATEIO_API_SECRET", "YOUR_SECRET_HERE")
+API_KEY = os.environ.get("GATEIO_API_KEY", "").strip()
+API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
 BASE_URL = "https://api.gateio.ws/api/v4"
 
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
 def gate_request(method, path, params=None):
-    """自动签名"""
     url = BASE_URL + path
+    timestamp = str(int(time.time()))
     headers = {
         'KEY': API_KEY,
-        'Timestamp': str(int(time.time())),
+        'Timestamp': timestamp,
         'Accept': 'application/json',
         'Content-Type': 'application/json'
     }
     query_string = ''
     body = ''
     if method == 'GET' and params:
-        query_string = '?' + '&'.join([f'{k}={v}' for k,v in params.items()])
+        query_string = '?' + '&'.join([f'{k}={v}' for k, v in params.items()])
     elif method == 'POST':
         body = json.dumps(params or {})
-    
-    sign_str = f"{method}\n/api/v4{path}{query_string}\n{headers['Timestamp']}\n{body}"
+
+    sign_str = f"{method}\n/api/v4{path}{query_string}\n{timestamp}\n{body}"
     headers['SIGN'] = hmac.new(API_SECRET.encode(), sign_str.encode(), hashlib.sha512).hexdigest()
-    
+
     if method == 'GET':
         resp = requests.get(url + query_string, headers=headers)
     else:
@@ -36,10 +38,9 @@ def gate_request(method, path, params=None):
     return resp.json()
 
 def get_klines(symbol):
-    """获取 K 线并计算指标"""
     params = {'currency_pair': symbol, 'interval': '1h', 'limit': 100}
     data = gate_request('GET', '/spot/candlesticks', params)
-    if not data:
+    if not data or len(data) < 26:
         return None
     closes = [float(d[2]) for d in data]
     highs = [float(d[3]) for d in data]
@@ -47,29 +48,65 @@ def get_klines(symbol):
     price = closes[-1]
     ema12 = sum(closes[-12:]) / 12
     ema26 = sum(closes[-26:]) / 26
+    tr_list = []
+    for i in range(1, min(15, len(closes))):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        tr_list.append(tr)
+    atr = sum(tr_list) / len(tr_list) if tr_list else 0
     adx = 28 if ema12 > ema26 else 15
-    atr = sum([max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, min(15, len(closes)))]) / 14
+    if len(closes) >= 20:
+        middle = sum(closes[-20:]) / 20
+        std = (sum([(x-middle)**2 for x in closes[-20:]]) / 20) ** 0.5
+        bb_upper = middle + 2*std
+        bb_lower = middle - 2*std
+        bb_width = (bb_upper - bb_lower) / middle
+    else:
+        bb_width = 0.1
     return {
+        'symbol': symbol,
         'price': price,
         'ema12': ema12,
         'ema26': ema26,
+        'atr': atr,
         'adx': adx,
-        'atr': atr
+        'bb_width': bb_width
     }
 
-def build_data_block():
+def generate_signal(coin_data):
+    if not coin_data:
+        return None
+    if coin_data['ema12'] > coin_data['ema26'] and coin_data['price'] > coin_data['ema12']:
+        direction = "BUY"
+    elif coin_data['ema12'] < coin_data['ema26'] and coin_data['price'] < coin_data['ema12']:
+        direction = "SELL"
+    else:
+        direction = "HOLD"
+    if direction != "HOLD":
+        return f"{direction} {coin_data['symbol']} | 价格:{coin_data['price']:.2f} | EMA12:{coin_data['ema12']:.2f} EMA26:{coin_data['ema26']:.2f} | ATR:{coin_data['atr']:.4f}"
+    return None
+
+def send_telegram_message(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram 未配置")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message}, timeout=10)
+    except Exception as e:
+        print(f"Telegram 发送失败: {e}")
+
+def main():
     coins = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'BNB_USDT', 'DOGE_USDT']
-    block = "<DATA>\n"
-    block += "保证金率=780%\n"
-    block += "今日已实现亏损=0.12U\n"
-    block += "手动暂停=否\n---\n"
+    signals = []
     for c in coins:
-        k = get_klines(c)
-        if k:
-            block += f"{c} | 当前价={k['price']:.2f} | ADX={k['adx']} | EMA12={k['ema12']:.2f} | EMA26={k['ema26']:.2f} | 布林带宽/中位数=0.10 | ATR系数=1.0 | 成交量/均量=1.0\n"
-    block += "---\n持仓\n无\n</DATA>"
-    return block
+        data = get_klines(c)
+        if data:
+            sig = generate_signal(data)
+            if sig:
+                signals.append(sig)
+    message = "🤖 Wealth Bot 信号提醒:\n" + "\n".join(signals) if signals else "🤖 Wealth Bot: 当前无明显趋势信号。"
+    print(message)
+    send_telegram_message(message)
 
 if __name__ == "__main__":
-    data = build_data_block()
-    print(data)
+    main()
