@@ -15,12 +15,6 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 def gate_request(method, path, params=None):
     url = BASE_URL + path
     timestamp = str(int(time.time()))
-    headers = {
-        'KEY': API_KEY,
-        'Timestamp': timestamp,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-    }
     query_string = ''
     body = ''
     if method == 'GET' and params:
@@ -28,19 +22,39 @@ def gate_request(method, path, params=None):
     elif method == 'POST':
         body = json.dumps(params or {})
 
-    sign_str = f"{method}\n/api/v4{path}{query_string}\n{timestamp}\n{body}"
-    headers['SIGN'] = hmac.new(API_SECRET.encode(), sign_str.encode(), hashlib.sha512).hexdigest()
+    sign_string = f"{method}\n/api/v4{path}{query_string}\n{timestamp}\n{body}"
+    signature = hmac.new(
+        API_SECRET.encode(),
+        sign_string.encode(),
+        hashlib.sha512
+    ).hexdigest()
 
-    if method == 'GET':
-        resp = requests.get(url + query_string, headers=headers)
-    else:
-        resp = requests.post(url + query_string, headers=headers, data=body)
-    return resp.json()
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'KEY': API_KEY,
+        'SIGN': signature,
+        'Timestamp': timestamp
+    }
+
+    try:
+        if method == 'GET':
+            resp = requests.get(url + query_string, headers=headers, timeout=15)
+        else:
+            resp = requests.post(url + query_string, headers=headers, data=body, timeout=15)
+        if resp.status_code != 200:
+            print(f"API 错误 {resp.status_code}: {resp.text}")
+            return None
+        return resp.json()
+    except Exception as e:
+        print(f"请求异常: {e}")
+        return None
 
 def get_klines(symbol):
-    params = {'currency_pair': symbol, 'interval': '1h', 'limit': 100}
+    params = {'currency_pair': symbol, 'interval': '1h', 'limit': 50}
     data = gate_request('GET', '/spot/candlesticks', params)
     if not data or len(data) < 26:
+        print(f"{symbol} 数据不足")
         return None
     closes = [float(d[2]) for d in data]
     highs = [float(d[3]) for d in data]
@@ -54,22 +68,13 @@ def get_klines(symbol):
         tr_list.append(tr)
     atr = sum(tr_list) / len(tr_list) if tr_list else 0
     adx = 28 if ema12 > ema26 else 15
-    if len(closes) >= 20:
-        middle = sum(closes[-20:]) / 20
-        std = (sum([(x-middle)**2 for x in closes[-20:]]) / 20) ** 0.5
-        bb_upper = middle + 2*std
-        bb_lower = middle - 2*std
-        bb_width = (bb_upper - bb_lower) / middle
-    else:
-        bb_width = 0.1
     return {
         'symbol': symbol,
         'price': price,
         'ema12': ema12,
         'ema26': ema26,
         'atr': atr,
-        'adx': adx,
-        'bb_width': bb_width
+        'adx': adx
     }
 
 def generate_signal(coin_data):
@@ -91,7 +96,8 @@ def send_telegram_message(message):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message}, timeout=10)
+        resp = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message}, timeout=10)
+        print(f"Telegram 发送状态: {resp.status_code}")
     except Exception as e:
         print(f"Telegram 发送失败: {e}")
 
