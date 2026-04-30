@@ -1,0 +1,27 @@
+name: Wealth Bot 定时执行
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 运行 Wealth Bot
+        env:
+          GATEIO_API_KEY: ${{ secrets.GATEIO_API_KEY }}
+          GATEIO_API_SECRET: ${{ secrets.GATEIO_API_SECRET }}
+        run: python data_feeder.py
