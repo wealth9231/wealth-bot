@@ -5,8 +5,8 @@ import hashlib
 import json
 import os
 
-API_KEY = os.environ.get("2968615408018ad943b0d09784e6895f", "").strip()
-API_SECRET = os.environ.get("0332122120b2e4df7a788219acb05e3221bd60a8981251549cccff78ff5ea95f", "").strip()
+API_KEY = os.environ.get("GATEIO_API_KEY", "").strip()
+API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
 BASE_URL = "https://api.gateio.ws/api/v4"
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
