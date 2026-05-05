@@ -27,8 +27,6 @@ CONTRACT_SIZES = {
     'BNB_USDT': 0.01,
     'DOGE_USDT': 100
 }
-
-# ================== 基础函数 ==================
 def gate_request(method, path, params=None):
     url = BASE_URL + path
     timestamp = str(int(time.time()))
@@ -40,7 +38,11 @@ def gate_request(method, path, params=None):
         body = json.dumps(params or {})
 
     sign_string = f"{method}\n/api/v4{path}{query_string}\n{timestamp}\n{body}"
-    signature = hmac.new(API_SECRET.encode(), sign_string.encode(), hashlib.sha512).hexdigest()
+    signature = hmac.new(
+        API_SECRET.encode(),
+        sign_string.encode(),
+        hashlib.sha512
+    ).hexdigest()
 
     headers = {
         'Accept': 'application/json',
@@ -49,10 +51,19 @@ def gate_request(method, path, params=None):
         'SIGN': signature,
         'Timestamp': timestamp
     }
+
     try:
         if method == 'GET':
             resp = requests.get(url + query_string, headers=headers, timeout=15)
         else:
+            resp = requests.post(url + query_string, headers=headers, data=body, timeout=15)
+        if resp.status_code != 200:
+            print(f"API 错误 {resp.status_code}: {resp.text}")
+            return None
+        return resp.json()
+    except Exception as e:
+        print(f"请求异常: {e}")
+        return None
             resp = requests.post(url + query_string, headers=headers, data=body, timeout=15)
         if resp.status_code != 200:
             print(f"API 错误 {resp.status_code}: {resp.text}")
