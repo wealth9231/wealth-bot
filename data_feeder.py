@@ -5,13 +5,30 @@ import hashlib
 import json
 import os
 
+# ================== 配置区 ==================
 API_KEY = os.environ.get("GATEIO_API_KEY", "").strip()
 API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
 BASE_URL = "https://api.gateio.ws/api/v4"
-
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
+# 风控常量
+MAX_LEVERAGE = 4
+MAX_RISK_PER_TRADE = 0.225  # 单笔最大亏损 (U)
+DAILY_LOSS_LIMIT = 2.5      # 单日最大亏损 (U)
+MIN_RISK_REWARD = 1.5       # 最低风险收益比
+TARGET_PROFIT_PCT = 0.03    # 目标仓位比例 (3%)
+
+# 合约面值
+CONTRACT_SIZES = {
+    'BTC_USDT': 0.0001,
+    'ETH_USDT': 0.01,
+    'SOL_USDT': 1,
+    'BNB_USDT': 0.01,
+    'DOGE_USDT': 100
+}
+
+# ================== 基础函数 ==================
 def gate_request(method, path, params=None):
     url = BASE_URL + path
     timestamp = str(int(time.time()))
@@ -23,11 +40,7 @@ def gate_request(method, path, params=None):
         body = json.dumps(params or {})
 
     sign_string = f"{method}\n/api/v4{path}{query_string}\n{timestamp}\n{body}"
-    signature = hmac.new(
-        API_SECRET.encode(),
-        sign_string.encode(),
-        hashlib.sha512
-    ).hexdigest()
+    signature = hmac.new(API_SECRET.encode(), sign_string.encode(), hashlib.sha512).hexdigest()
 
     headers = {
         'Accept': 'application/json',
@@ -36,7 +49,6 @@ def gate_request(method, path, params=None):
         'SIGN': signature,
         'Timestamp': timestamp
     }
-
     try:
         if method == 'GET':
             resp = requests.get(url + query_string, headers=headers, timeout=15)
@@ -50,11 +62,20 @@ def gate_request(method, path, params=None):
         print(f"请求异常: {e}")
         return None
 
+def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'disable_web_page_preview': True}, timeout=10)
+    except Exception as e:
+        print(f"Telegram 发送失败: {e}")
+
+# ================== 交易核心 ==================
 def get_klines(symbol):
     params = {'currency_pair': symbol, 'interval': '1h', 'limit': 50}
     data = gate_request('GET', '/spot/candlesticks', params)
     if not data or len(data) < 26:
-        print(f"{symbol} 数据不足")
         return None
     closes = [float(d[2]) for d in data]
     highs = [float(d[3]) for d in data]
@@ -67,52 +88,172 @@ def get_klines(symbol):
         tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
         tr_list.append(tr)
     atr = sum(tr_list) / len(tr_list) if tr_list else 0
-    adx = 28 if ema12 > ema26 else 15
+    middle = sum(closes[-20:]) / 20
+    std = (sum([(x-middle)**2 for x in closes[-20:]]) / 20) ** 0.5
     return {
-        'symbol': symbol,
+        'symbol': symbol.replace('_', ''),
         'price': price,
         'ema12': ema12,
         'ema26': ema26,
         'atr': atr,
-        'adx': adx
+        'bb_lower': middle - 2*std,
+        'bb_upper': middle + 2*std
     }
 
-def generate_signal(coin_data):
-    if not coin_data:
+def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
+    """核心下单函数：市价开仓 + 自动挂止损止盈"""
+    contract = symbol.replace('_USDT', '_USDT')
+    settle = 'usdt'
+    
+    # 1. 设置杠杆
+    gate_request('POST', f'/futures/{settle}/contracts/{contract}/leverage', {'leverage': str(leverage)})
+    
+    # 2. 计算下单价格
+    ticker = gate_request('GET', f'/futures/{settle}/contracts/{contract}/tickers')
+    mark_price = float(ticker[0]['mark_price']) if ticker else 0
+    
+    # 3. 市价单开仓
+    order_size = max(int(qty), 1)
+    order_params = {
+        'contract': contract,
+        'size': order_size,
+        'price': '0',
+        'tif': 'ioc',
+        'text': 't-WealthBot'
+    }
+    gate_request('POST', f'/futures/{settle}/orders', order_params)
+    
+    # 4. 挂止损止盈单
+    if stop_loss > 0:
+        gate_request('POST', f'/futures/{settle}/price_orders', {
+            'contract': contract,
+            'size': -order_size,
+            'price': str(int(stop_loss)),
+            'close': True,
+            'tif': 'gtc',
+            'text': 't-bot-sl'
+        })
+    if take_profit > 0:
+        gate_request('POST', f'/futures/{settle}/price_orders', {
+            'contract': contract,
+            'size': -order_size,
+            'price': str(int(take_profit)),
+            'close': True,
+            'tif': 'gtc',
+            'text': 't-bot-tp'
+        })
+    return order_size
+
+def check_margin():
+    """检查账户保证金状态"""
+    data = gate_request('GET', '/futures/usdt/accounts')
+    if not data:
         return None
-    if coin_data['ema12'] > coin_data['ema26'] and coin_data['price'] > coin_data['ema12']:
-        direction = "BUY"
-    elif coin_data['ema12'] < coin_data['ema26'] and coin_data['price'] < coin_data['ema12']:
-        direction = "SELL"
-    else:
-        direction = "HOLD"
-    if direction != "HOLD":
-        return f"{direction} {coin_data['symbol']} | 价格:{coin_data['price']:.2f} | EMA12:{coin_data['ema12']:.2f} EMA26:{coin_data['ema26']:.2f} | ATR:{coin_data['atr']:.4f}"
-    return None
+    total_margin = float(data.get('total', 0))
+    unrealised_pnl = float(data.get('unrealised_pnl', 0))
+    return total_margin, unrealised_pnl
 
-def send_telegram_message(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram 未配置")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        resp = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message}, timeout=10)
-        print(f"Telegram 发送状态: {resp.status_code}")
-    except Exception as e:
-        print(f"Telegram 发送失败: {e}")
-
-def main():
+def run_strategy():
+    send_telegram("🤖 Wealth Bot 全自动模式已启动")
+    
+    # 检查账户状态
+    margin_info = check_margin()
+    if margin_info:
+        total_margin, _ = margin_info
+        if total_margin < 20:
+            send_telegram(f"⚠️ 账户保证金过低 ({total_margin:.2f}U)，暂停交易")
+            return
+    
     coins = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'BNB_USDT', 'DOGE_USDT']
-    signals = []
+    traded = False
+    
     for c in coins:
+        if traded:
+            break
+            
         data = get_klines(c)
-        if data:
-            sig = generate_signal(data)
-            if sig:
-                signals.append(sig)
-    message = "🤖 Wealth Bot 信号提醒:\n" + "\n".join(signals) if signals else "🤖 Wealth Bot: 当前无明显趋势信号。"
-    print(message)
-    send_telegram_message(message)
+        if not data:
+            continue
+            
+        symbol = data['symbol']
+        price = data['price']
+        atr = data['atr']
+        ema12 = data['ema12']
+        ema26 = data['ema26']
+        
+        # 趋势跟随策略：EMA12 > EMA26 且价格在 EMA12 之上 → 做多
+        if ema12 > ema26 and price > ema12:
+            direction = "long"
+            stop_loss = price - 2 * atr
+            take_profit = price + 3 * atr
+            risk_reward = (take_profit - price) / (price - stop_loss) if (price - stop_loss) > 0 else 0
+            
+            if risk_reward < MIN_RISK_REWARD:
+                send_telegram(f"ℹ️ {symbol} 风险收益比不足 ({risk_reward:.2f})，跳过")
+                continue
+            
+            # 计算数量
+            contract_size = CONTRACT_SIZES.get(c, 0)
+            if contract_size == 0:
+                continue
+            position_value = 50 * TARGET_PROFIT_PCT
+            qty = position_value / (contract_size * price)
+            
+            if qty < 1:
+                send_telegram(f"ℹ️ {symbol} 仓位不足 (计算{qty:.2f}张)，跳过")
+                continue
+            
+            max_qty = MAX_RISK_PER_TRADE / ((price - stop_loss) * contract_size)
+            final_qty = int(min(qty, max_qty))
+            
+            if final_qty < 1:
+                continue
+                
+            # 执行下单
+            size = place_order(symbol, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
+            send_telegram(
+                f"🔔 <EXECUTE> {direction.upper()} {symbol} {size}张 杠杆{MAX_LEVERAGE}x\n"
+                f"入场: {price:.2f} | 止损: {stop_loss:.2f} | 止盈: {take_profit:.2f}\n"
+                f"预计亏损: {(price - stop_loss) * size * contract_size:.3f}U"
+            )
+            traded = True
+            
+        elif ema12 < ema26 and price < ema12:
+            direction = "short"
+            stop_loss = price + 2 * atr
+            take_profit = price - 3 * atr
+            risk_reward = (price - take_profit) / (stop_loss - price) if (stop_loss - price) > 0 else 0
+            
+            if risk_reward < MIN_RISK_REWARD:
+                send_telegram(f"ℹ️ {symbol} 风险收益比不足 ({risk_reward:.2f})，跳过")
+                continue
+            
+            contract_size = CONTRACT_SIZES.get(c, 0)
+            if contract_size == 0:
+                continue
+            position_value = 50 * TARGET_PROFIT_PCT
+            qty = position_value / (contract_size * price)
+            
+            if qty < 1:
+                send_telegram(f"ℹ️ {symbol} 仓位不足 (计算{qty:.2f}张)，跳过")
+                continue
+            
+            max_qty = MAX_RISK_PER_TRADE / ((stop_loss - price) * contract_size)
+            final_qty = int(min(qty, max_qty))
+            
+            if final_qty < 1:
+                continue
+                
+            size = place_order(symbol, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
+            send_telegram(
+                f"🔔 <EXECUTE> {direction.upper()} {symbol} {size}张 杠杆{MAX_LEVERAGE}x\n"
+                f"入场: {price:.2f} | 止损: {stop_loss:.2f} | 止盈: {take_profit:.2f}\n"
+                f"预计亏损: {(stop_loss - price) * size * contract_size:.3f}U"
+            )
+            traded = True
+    
+    if not traded:
+        send_telegram("ℹ️ Wealth Bot: 当前无满足条件的交易信号")
 
 if __name__ == "__main__":
-    main()
+    run_strategy()
