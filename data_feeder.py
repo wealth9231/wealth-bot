@@ -161,10 +161,8 @@ def get_klines(symbol):
     }
 
 def format_signal(symbol, direction, market_state, price, adx, rsi, atr, stop_loss, take_profit, qty, risk_reward, strategy):
-    """格式化 Telegram 消息"""
     arrow = "🟢" if direction == "LONG" else "🔴"
     state_emoji = "📈" if market_state == "趋势市" else "🔄"
-    
     msg = f"""
 ╔══════════════════════╗
 ║  {arrow} {direction} {symbol}  x{qty}张
@@ -183,20 +181,52 @@ def format_signal(symbol, direction, market_state, price, adx, rsi, atr, stop_lo
 """
     return msg.strip()
 
-def run_strategy():
-    send_telegram("🤖 Wealth Bot v4.0 已上线\n⏰ " + time.strftime("%H:%M UTC"))
+def format_brief(coins_data):
+    """生成市场简报"""
+    lines = []
+    lines.append("━━━━━━━━━━━━━━━━━")
+    lines.append(f"  📊 市场扫描 · {time.strftime('%H:%M UTC')}")
+    lines.append("━━━━━━━━━━━━━━━━━")
     
+    for d in coins_data:
+        symbol = d['symbol']
+        price = d['price']
+        adx = d['adx']
+        rsi = d['rsi']
+        ema12 = d['ema12']
+        ema26 = d['ema26']
+        
+        # 简短趋势描述
+        if adx > 25:
+            if ema12 > ema26:
+                trend = "📈多头"
+            elif ema12 < ema26:
+                trend = "📉空头"
+            else:
+                trend = "➡️整理"
+        elif adx < 20:
+            trend = "🔄震荡"
+        else:
+            trend = "⏸️过渡"
+        
+        lines.append(f" {symbol:<5} {price:>8.2f}  {trend}  ADX:{adx:>4.1f} RSI:{rsi:>4.1f}")
+    
+    lines.append("━━━━━━━━━━━━━━━━━")
+    lines.append(" ⚠️ 整体仓位未达标 · 保持观望")
+    lines.append("━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+def run_strategy():
     coins = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'BNB_USDT', 'DOGE_USDT']
+    all_data = []
     signals_sent = 0
     
     for c in coins:
-        if signals_sent >= 2:
-            break
-            
         data = get_klines(c)
         if not data:
             continue
         
+        all_data.append(data)
         symbol = data['symbol']
         price = data['price']
         adx = data['adx']
@@ -207,6 +237,7 @@ def run_strategy():
         bb_lower = data['bb_lower']
         bb_upper = data['bb_upper']
         
+        # 市场状态判断
         if adx > 25:
             market_state = "趋势市"
             strategy = "趋势跟踪"
@@ -214,8 +245,9 @@ def run_strategy():
             market_state = "震荡市"
             strategy = "网格交易"
         else:
-            continue
+            continue  # 过渡期不交易
         
+        # 趋势跟踪
         if market_state == "趋势市":
             if ema12 > ema26 and price > ema12 and rsi < 70:
                 direction = "LONG"
@@ -230,7 +262,8 @@ def run_strategy():
             risk_reward = abs(take_profit - price) / abs(price - stop_loss) if abs(price - stop_loss) > 0 else 0
             if risk_reward < MIN_RISK_REWARD:
                 continue
-                
+        
+        # 震荡网格
         elif market_state == "震荡市":
             if price <= bb_lower * 1.02 and rsi < 40:
                 direction = "LONG"
@@ -254,22 +287,26 @@ def run_strategy():
         
         position_value = 50 * TARGET_PROFIT_PCT
         qty = position_value / (contract_size * price)
-        
         if qty < 1:
             continue
         
         max_qty = MAX_RISK_PER_TRADE / (abs(price - stop_loss) * contract_size)
         final_qty = int(min(qty, max_qty))
-        
         if final_qty < 1:
             continue
         
         msg = format_signal(symbol, direction, market_state, price, adx, rsi, atr, stop_loss, take_profit, final_qty, risk_reward, strategy)
         send_telegram(msg)
         signals_sent += 1
+        
+        # 最多发两个信号
+        if signals_sent >= 2:
+            break
     
-    if signals_sent == 0:
-        send_telegram("ℹ️ 当前无满足条件的交易信号\n⏰ " + time.strftime("%H:%M UTC"))
+    # 无信号时发送市场简报
+    if signals_sent == 0 and all_data:
+        brief = format_brief(all_data)
+        send_telegram(brief)
 
 if __name__ == "__main__":
     run_strategy()
