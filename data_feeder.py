@@ -101,22 +101,30 @@ def send_telegram(message):
 
 # ================== 远程遥控模块（已修复） ==================
 def check_telegram_commands():
-    """读取 Telegram 消息，解析远程指令"""
+    """读取最新一条未处理指令并执行"""
     if not TELEGRAM_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     try:
-        resp = requests.get(url, params={'limit': 5, 'timeout': 10}).json()
-        if not resp.get('ok'):
+        resp = requests.get(url, params={'limit': 1, 'timeout': 10}).json()
+        if not resp.get('ok') or not resp.get('result'):
             return
-        for update in resp.get('result', []):
-            msg = update.get('message', {})
-            text = msg.get('text', '')
-            chat_id = str(msg.get('chat', {}).get('id', ''))
-            if chat_id != TELEGRAM_CHAT_ID:
-                continue
-            update_id = update.get('update_id', 0)
-            handle_command(text, update_id)
+
+        update = resp['result'][-1]
+        msg = update.get('message', {})
+        text = msg.get('text', '')
+        chat_id = str(msg.get('chat', {}).get('id', ''))
+
+        if chat_id != TELEGRAM_CHAT_ID:
+            return
+
+        # 5分钟内发的指令才处理
+        msg_time = msg.get('date', 0)
+        if time.time() - msg_time > 300:
+            return
+
+        update_id = update.get('update_id', 0)
+        handle_command(text, update_id)
     except Exception as e:
         print(f"遥控检查异常: {e}")
 
@@ -174,7 +182,7 @@ def handle_command(text, update_id):
         mark_command_processed(update_id)
 
 def mark_command_processed(update_id):
-    """标记指令已处理，防止重复响应"""
+    """标记已处理"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     requests.get(url, params={'offset': update_id + 1, 'timeout': 1})
 
@@ -272,7 +280,7 @@ def compute_rsi(closes, period=14):
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
 
     if avg_loss == 0:
-        return 50  # 持平市场返回中性值 50
+        return 50
     return 100 - (100 / (1 + avg_gain / avg_loss))
 
 def get_klines(symbol):
