@@ -36,7 +36,7 @@ exchange = ccxt.gateio({
 })
 
 # ================== 风控参数 ==================
-ACCOUNT_BALANCE = 70
+ACCOUNT_BALANCE = 70.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.03
@@ -109,10 +109,8 @@ def check_telegram_commands():
 
 def handle_command(text, update_id):
     global TRADING_ENABLED, ALLOW_SHORT, MAX_RISK_PER_TRADE
-
     cmd = text.strip().lower()
     response = None
-
     if cmd == '/stop':
         TRADING_ENABLED = False
         response = "🛑 交易已暂停"
@@ -138,30 +136,36 @@ def handle_command(text, update_id):
             response = "❌ 格式错误"
     elif cmd == '/help':
         response = "📋 /stop /start /status /closeall /mode /risk /help"
-
     if response:
         send_telegram(response)
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def fetch_real_balance():
-    """获取真实账户余额（模拟和实盘通用）"""
+    """获取账户余额（模拟模式直接返回70，实盘读API）"""
+    if DRY_RUN:
+        return 70.0, 70.0, 0.0
     try:
-        balance = exchange.fetch_balance()
+        balance = exchange.fetch_balance({'type': 'swap'})
         usdt = balance.get('USDT', {})
         total = usdt.get('total', 0)
         free = usdt.get('free', 0)
-        used = usdt.get('used', 0)
-        return total, free, used
-    except Exception as e:
-        print(f"获取余额失败: {e}")
+        if total == 0:
+            accounts = exchange.privateGetFuturesUsdtAccounts()
+            if isinstance(accounts, list) and len(accounts) > 0:
+                acc = accounts[0]
+                total = float(acc.get('total', 0))
+                free = float(acc.get('available', 0))
+        return total, free, total - free
+    except:
         return 0, 0, 0
 
 def fetch_real_positions():
-    """获取真实持仓（模拟和实盘通用）"""
+    """获取真实持仓（模拟模式返回空列表）"""
+    if DRY_RUN:
+        return []
     try:
         return exchange.fetch_positions()
-    except Exception as e:
-        print(f"获取持仓失败: {e}")
+    except:
         return []
 
 def get_status_report():
@@ -290,9 +294,12 @@ def adaptive_parameters(adx, atr, price, market_state):
     else:
         return None
     return {
-        'stop_mult': stop_mult, 'tp_mult': tp_mult,
-        'position_pct': position_pct, 'rsi_buy_max': rsi_buy_max,
-        'rsi_sell_min': rsi_sell_min, 'min_rr': min_rr
+        'stop_mult': stop_mult,
+        'tp_mult': tp_mult,
+        'position_pct': position_pct,
+        'rsi_buy_max': rsi_buy_max,
+        'rsi_sell_min': rsi_sell_min,
+        'min_rr': min_rr
     }
 
 # ================== 下单（模拟/实盘自动切换） ==================
@@ -328,7 +335,10 @@ def format_brief(coins_data):
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"📊 Wealth Bot · {time.strftime('%H:%M UTC')}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
+    if total > 0:
+        lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
+    else:
+        lines.append("💰 余额获取中（请确认合约账户已充值）")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
 
     sorted_data = sorted(coins_data, key=lambda x: x['adx'], reverse=True)
