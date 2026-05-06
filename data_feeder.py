@@ -11,7 +11,7 @@ API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-# ================== 加载外部配置文件 ==================
+# ================== 加载外部配置 ==================
 def load_config():
     try:
         with open('config.json', 'r') as f:
@@ -86,7 +86,7 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram 发送失败: {e}")
 
-# ================== 远程指令（最简可靠版） ==================
+# ================== 远程指令 ==================
 def check_telegram_commands():
     if not TELEGRAM_TOKEN:
         return
@@ -144,15 +144,24 @@ def handle_command(text, update_id):
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def get_status_report():
-    positions = exchange.fetch_positions() if TRADING_ENABLED else []
-    pos_list = [f"{p['symbol']}: {p['contracts']}张" for p in positions if float(p.get('contracts', 0)) != 0]
-    pos_text = "\n".join(pos_list) if pos_list else "无持仓"
-    mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
-    return f"""📊 状态 ({mode_text})
-本金: {ACCOUNT_BALANCE}U | 交易: {'🟢' if TRADING_ENABLED else '🔴'}
-今日: {today_trades}/{MAX_DAILY_TRADES}
+    try:
+        balance = exchange.fetch_balance()
+        usdt = balance.get('USDT', {})
+        total_equity = usdt.get('total', 0)
+        free_balance = usdt.get('free', 0)
+        positions = exchange.fetch_positions()
+        pos_list = [f"{p['symbol']}: {p['contracts']}张 盈亏{p.get('unrealizedPnl', 0):.2f}U" for p in positions if float(p.get('contracts', 0)) != 0]
+        pos_text = "\n".join(pos_list) if pos_list else "无持仓"
+        unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
+        mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
+        return f"""📊 状态 ({mode_text})
+权益: {total_equity:.2f}U | 浮动盈亏: {unrealized_pnl:+.2f}U
+可用: {free_balance:.2f}U
+今日开仓: {today_trades}/{MAX_DAILY_TRADES}
 持仓:
 {pos_text}"""
+    except Exception as e:
+        return f"❌ 获取状态失败: {e}"
 
 def close_all_positions():
     if DRY_RUN:
@@ -190,8 +199,7 @@ def compute_adx(highs, lows, closes, period=14):
     dx_sum = 0
     count = 0
     for i in range(len(tr_list) - period, len(tr_list)):
-        if atr_val == 0:
-            continue
+        if atr_val == 0: continue
         pdi = plus_di / atr_val * 100
         mdi = minus_di / atr_val * 100
         dx = abs(pdi - mdi) / (pdi + mdi) * 100 if (pdi + mdi) != 0 else 0
@@ -212,15 +220,13 @@ def compute_rsi(closes, period=14):
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0:
-        return 50
+    if avg_loss == 0: return 50
     return 100 - (100 / (1 + avg_gain / avg_loss))
 
 def get_klines(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
-        if not ohlcv or len(ohlcv) < 50:
-            return None
+        if not ohlcv or len(ohlcv) < 50: return None
         closes = [c[4] for c in ohlcv]
         highs = [c[2] for c in ohlcv]
         lows = [c[3] for c in ohlcv]
@@ -229,10 +235,7 @@ def get_klines(symbol):
         ema26 = sum(closes[-26:]) / 26
         adx = compute_adx(highs, lows, closes)
         rsi = compute_rsi(closes)
-        tr_list = []
-        for i in range(1, min(15, len(closes))):
-            tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
-            tr_list.append(tr)
+        tr_list = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, min(15, len(closes)))]
         atr = sum(tr_list) / len(tr_list) if tr_list else 0
         middle = sum(closes[-20:]) / 20
         std = (sum([(x-middle)**2 for x in closes[-20:]]) / 20) ** 0.5
@@ -300,13 +303,31 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
         print(f"下单失败: {e}")
         return 0
 
-# ================== 美化简报 ==================
+# ================== 市场简报 ==================
 def format_brief(coins_data):
     lines = []
-    lines.append("╔══════════════════════════╗")
-    lines.append("║     📊 Wealth Bot 市场简报    ║")
-    lines.append(f"║     🕐 {time.strftime('%Y-%m-%d %H:%M UTC')}      ║")
-    lines.append("╠══════════════════════════╣")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📊 Wealth Bot · {time.strftime('%H:%M UTC')}")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+
+    # 获取真实账户余额和盈亏
+    try:
+        balance = exchange.fetch_balance()
+        usdt = balance.get('USDT', {})
+        total_equity = usdt.get('total', 0)
+        free_balance = usdt.get('free', 0)
+        positions = exchange.fetch_positions()
+        unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
+        if total_equity > 0:
+            pnl_str = f"+{unrealized_pnl:.2f}" if unrealized_pnl >= 0 else f"{unrealized_pnl:.2f}"
+            lines.append(f"💰 权益: {total_equity:.2f}U ({pnl_str}U) | 可用: {free_balance:.2f}U")
+        else:
+            lines.append("💰 账户数据获取中...")
+    except:
+        lines.append("💰 账户数据获取中...")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+
     sorted_data = sorted(coins_data, key=lambda x: x['adx'], reverse=True)
     for d in sorted_data:
         symbol = d['symbol'].replace('/', '').replace('USDT', '')
@@ -314,6 +335,7 @@ def format_brief(coins_data):
         adx = d['adx']
         rsi = d['rsi']
         ema12, ema26 = d['ema12'], d['ema26']
+
         if adx > 40:
             trend_icon, trend_text = "🔥", "强趋势"
         elif adx > 25:
@@ -322,33 +344,31 @@ def format_brief(coins_data):
             trend_icon, trend_text = "🔄", "震荡"
         else:
             trend_icon, trend_text = "⏸️", "过渡"
+
         direction = "多头" if ema12 > ema26 else ("空头" if ema12 < ema26 else "整理")
-        if rsi > 70:
-            rsi_state = "⚠️超买"
-        elif rsi < 30:
-            rsi_state = "💧超卖"
-        else:
-            rsi_state = "✅正常"
+        rsi_note = "⚠️超买" if rsi > 70 else ("💧超卖" if rsi < 30 else "")
+
         if price >= 1000:
             price_str = f"${price:,.2f}"
         elif price >= 1:
             price_str = f"${price:.2f}"
         else:
             price_str = f"${price:.6f}"
-        lines.append(f"║ {trend_icon} {symbol:<6} {price_str:>12}  ║")
-        lines.append(f"║    {trend_text}·{direction} | ADX:{adx:>5.1f} | RSI:{rsi:>5.1f} {rsi_state} ║")
-        lines.append("║" + " " * 28 + "║")
-    lines.append("╠══════════════════════════╣")
+
+        lines.append(f"{trend_icon} {symbol:<6} {price_str}")
+        lines.append(f"   {trend_text}·{direction} | ADX {adx:.1f} | RSI {rsi:.1f} {rsi_note}")
+        lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
     risk_remaining = MAX_DAILY_TRADES - today_trades
-    lines.append(f"║ 🛡️ 风控: 单笔≤{MAX_RISK_PER_TRADE}U | 今日剩余{risk_remaining}次 ║")
+    lines.append(f"🛡️ 风控 | 单笔≤{MAX_RISK_PER_TRADE}U | 今日剩{risk_remaining}次")
     mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
-    if not TRADING_ENABLED:
-        lines.append("║ 🔴 交易已暂停 | 发送 /start 恢复 ║")
+    if TRADING_ENABLED:
+        lines.append(f"🟢 交易中({mode_text}) | /status 查状态")
     else:
-        lines.append(f"║ 🟢 自动交易中({mode_text}) | /status 查状态 ║")
-    lines.append("╠══════════════════════════╣")
-    lines.append("║ 💡 /help 查看遥控指令        ║")
-    lines.append("╚══════════════════════════╝")
+        lines.append("🔴 已暂停 | /start 恢复")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("💡 /help 遥控指令")
     return "\n".join(lines)
 
 # ================== 主策略 ==================
@@ -361,9 +381,11 @@ def run_strategy():
     if today_trades >= MAX_DAILY_TRADES:
         send_telegram(f"⚠️ 今日已开仓 {MAX_DAILY_TRADES} 次，触发熔断")
         return
+
     coins = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'DOGE/USDT']
     all_data = []
     signals_sent = 0
+
     for c in coins:
         if signals_sent >= 2:
             break
@@ -374,15 +396,18 @@ def run_strategy():
         adx, rsi, price = data['adx'], data['rsi'], data['price']
         atr, ema12, ema26 = data['atr'], data['ema12'], data['ema26']
         bb_lower, bb_upper = data['bb_lower'], data['bb_upper']
+
         if adx > 25:
             market_state, strategy = "趋势市", "趋势跟踪"
         elif adx < 20:
             market_state, strategy = "震荡市", "网格交易"
         else:
             continue
+
         adaptive = adaptive_parameters(adx, atr, price, market_state)
         if not adaptive:
             continue
+
         if market_state == "趋势市":
             if ema12 > ema26 and price > ema12 and rsi < adaptive['rsi_buy_max']:
                 direction = "buy"
@@ -407,6 +432,7 @@ def run_strategy():
                 continue
         else:
             continue
+
         contract_size = CONTRACT_SIZES.get(c, 0)
         if contract_size == 0:
             continue
@@ -416,6 +442,7 @@ def run_strategy():
         final_qty = int(min(qty, max_qty))
         if final_qty < 1:
             continue
+
         size = place_order(c, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
         if size > 0:
             prefix = "🧪 [模拟]" if DRY_RUN else "🔔 [实盘]"
@@ -436,6 +463,7 @@ def run_strategy():
             if today_trades >= MAX_DAILY_TRADES:
                 send_telegram("⚠️ 今日开仓已达上限，后续信号将跳过")
                 break
+
     if signals_sent == 0 and all_data:
         brief = format_brief(all_data)
         send_telegram(brief)
