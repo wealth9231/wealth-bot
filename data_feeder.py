@@ -7,9 +7,11 @@ import ccxt
 
 # ================== 账户配置 ==================
 API_KEY = os.environ.get("GATEIO_API_KEY", "").strip()
-API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+...
+TRADING_ENABLED = True
+ALLOW_SHORT = True
+...
+today_trades = 0
 
 # ================== 交易所初始化 ==================
 exchange = ccxt.gateio({
