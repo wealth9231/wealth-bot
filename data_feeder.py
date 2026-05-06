@@ -1,7 +1,5 @@
 import requests
 import time
-import hmac
-import hashlib
 import json
 import os
 import sqlite3
@@ -25,7 +23,6 @@ exchange = ccxt.gateio({
 ACCOUNT_BALANCE = 70
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = 0.5
-DAILY_LOSS_LIMIT = 3.5
 TARGET_PROFIT_PCT = 0.03
 MAX_DAILY_TRADES = 3
 
@@ -52,12 +49,6 @@ def init_db():
          qty REAL, pnl REAL,
          entry_time TEXT, exit_time TEXT,
          status TEXT)''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS signals
-        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-         symbol TEXT, direction TEXT,
-         market_state TEXT, strategy TEXT,
-         adx REAL, rsi REAL, price REAL,
-         time TEXT, executed INTEGER DEFAULT 0)''')
     conn.commit()
     return conn
 
@@ -77,6 +68,81 @@ def send_telegram(message):
         requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'disable_web_page_preview': True}, timeout=10)
     except Exception as e:
         print(f"Telegram 发送失败: {e}")
+
+# ================== 远程指令（最简可靠版） ==================
+def check_telegram_commands():
+    if not TELEGRAM_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    try:
+        resp = requests.get(url, params={'limit': 1, 'timeout': 10}).json()
+        if not resp.get('ok') or not resp.get('result'):
+            return
+        update = resp['result'][0]
+        msg = update.get('message', {})
+        text = msg.get('text', '')
+        chat_id = str(msg.get('chat', {}).get('id', ''))
+        if chat_id != TELEGRAM_CHAT_ID:
+            return
+        if text.startswith('/'):
+            update_id = update.get('update_id', 0)
+            handle_command(text, update_id)
+    except Exception as e:
+        print(f"指令检查异常: {e}")
+
+def handle_command(text, update_id):
+    global TRADING_ENABLED, ALLOW_SHORT, MAX_RISK_PER_TRADE
+
+    cmd = text.strip().lower()
+    response = None
+
+    if cmd == '/stop':
+        TRADING_ENABLED = False
+        response = "🛑 交易已暂停"
+    elif cmd == '/start':
+        TRADING_ENABLED = True
+        response = "🟢 交易已恢复"
+    elif cmd == '/status':
+        response = get_status_report()
+    elif cmd == '/closeall':
+        close_all_positions()
+        response = "🔒 已平掉所有仓位"
+    elif cmd == '/mode safe':
+        ALLOW_SHORT = False
+        response = "🛡️ 已切换保守模式"
+    elif cmd == '/mode aggressive':
+        ALLOW_SHORT = True
+        response = "⚔️ 已切换激进模式"
+    elif cmd.startswith('/risk '):
+        try:
+            MAX_RISK_PER_TRADE = max(0.1, min(float(cmd.split()[-1]), 2.0))
+            response = f"⚙️ 亏损上限已调至 {MAX_RISK_PER_TRADE}U"
+        except:
+            response = "❌ 格式错误"
+    elif cmd == '/help':
+        response = "📋 /stop /start /status /closeall /mode /risk /help"
+
+    if response:
+        send_telegram(response)
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
+
+def get_status_report():
+    positions = exchange.fetch_positions() if TRADING_ENABLED else []
+    pos_list = [f"{p['symbol']}: {p['contracts']}张" for p in positions if float(p.get('contracts', 0)) != 0]
+    pos_text = "\n".join(pos_list) if pos_list else "无持仓"
+    return f"""📊 状态
+本金: {ACCOUNT_BALANCE}U | 交易: {'🟢' if TRADING_ENABLED else '🔴'}
+今日: {today_trades}/{MAX_DAILY_TRADES}
+持仓:
+{pos_text}"""
+
+def close_all_positions():
+    positions = exchange.fetch_positions()
+    for p in positions:
+        contracts = abs(float(p.get('contracts', 0)))
+        if contracts > 0:
+            side = 'sell' if float(p['contracts']) > 0 else 'buy'
+            exchange.create_order(p['symbol'], 'market', side, contracts, None, {'reduce_only': True})
 
 # ================== 指标计算 ==================
 def compute_adx(highs, lows, closes, period=14):
@@ -261,6 +327,7 @@ def format_brief(coins_data):
 # ================== 主策略 ==================
 def run_strategy():
     global today_trades
+    check_telegram_commands()
     if not TRADING_ENABLED:
         send_telegram("⏸️ 交易已暂停，发送 /start 恢复")
         return
