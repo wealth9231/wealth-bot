@@ -7,11 +7,25 @@ import ccxt
 
 # ================== 账户配置 ==================
 API_KEY = os.environ.get("GATEIO_API_KEY", "").strip()
-...
-TRADING_ENABLED = True
-ALLOW_SHORT = True
-...
-today_trades = 0
+API_SECRET = os.environ.get("GATEIO_API_SECRET", "").strip()
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+# ================== 加载外部配置文件 ==================
+def load_config():
+    try:
+        with open('config.json', 'r') as f:
+            return json.load(f)
+    except:
+        return {
+            "dry_run": True,
+            "max_risk_per_trade": 0.5,
+            "max_daily_trades": 3,
+            "allow_short": True,
+            "trading_enabled": True
+        }
+
+config = load_config()
 
 # ================== 交易所初始化 ==================
 exchange = ccxt.gateio({
@@ -24,12 +38,13 @@ exchange = ccxt.gateio({
 # ================== 风控参数 ==================
 ACCOUNT_BALANCE = 70
 MAX_LEVERAGE = 4
-MAX_RISK_PER_TRADE = 0.5
+MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.03
-MAX_DAILY_TRADES = 3
+MAX_DAILY_TRADES = config["max_daily_trades"]
 
-TRADING_ENABLED = True
-ALLOW_SHORT = True
+TRADING_ENABLED = config["trading_enabled"]
+ALLOW_SHORT = config["allow_short"]
+DRY_RUN = config["dry_run"]
 
 CONTRACT_SIZES = {
     'BTC/USDT': 0.0001,
@@ -132,13 +147,17 @@ def get_status_report():
     positions = exchange.fetch_positions() if TRADING_ENABLED else []
     pos_list = [f"{p['symbol']}: {p['contracts']}张" for p in positions if float(p.get('contracts', 0)) != 0]
     pos_text = "\n".join(pos_list) if pos_list else "无持仓"
-    return f"""📊 状态
+    mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
+    return f"""📊 状态 ({mode_text})
 本金: {ACCOUNT_BALANCE}U | 交易: {'🟢' if TRADING_ENABLED else '🔴'}
 今日: {today_trades}/{MAX_DAILY_TRADES}
 持仓:
 {pos_text}"""
 
 def close_all_positions():
+    if DRY_RUN:
+        send_telegram("🧪 [模拟] 一键清仓已触发")
+        return
     positions = exchange.fetch_positions()
     for p in positions:
         contracts = abs(float(p.get('contracts', 0)))
@@ -259,18 +278,23 @@ def adaptive_parameters(adx, atr, price, market_state):
         'rsi_sell_min': rsi_sell_min, 'min_rr': min_rr
     }
 
-# ================== 下单 ==================
+# ================== 下单（模拟/实盘自动切换） ==================
 def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
+    if DRY_RUN:
+        send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.2f} 止盈{take_profit:.2f}")
+        return int(qty)
     try:
         exchange.set_leverage(leverage, symbol)
         order_size = max(int(qty), 1)
         exchange.create_order(symbol, 'market', side, order_size, None, {'tif': 'ioc'})
         if stop_loss > 0:
             sl_side = 'sell' if side == 'buy' else 'buy'
-            exchange.create_order(symbol, 'stop', sl_side, order_size, stop_loss, {'stopPrice': stop_loss, 'reduce_only': True})
+            exchange.create_order(symbol, 'stop', sl_side, order_size, stop_loss,
+                                  {'stopPrice': stop_loss, 'reduce_only': True})
         if take_profit > 0:
             tp_side = 'sell' if side == 'buy' else 'buy'
-            exchange.create_order(symbol, 'limit', tp_side, order_size, take_profit, {'reduce_only': True})
+            exchange.create_order(symbol, 'limit', tp_side, order_size, take_profit,
+                                  {'reduce_only': True})
         return order_size
     except Exception as e:
         print(f"下单失败: {e}")
@@ -317,10 +341,11 @@ def format_brief(coins_data):
     lines.append("╠══════════════════════════╣")
     risk_remaining = MAX_DAILY_TRADES - today_trades
     lines.append(f"║ 🛡️ 风控: 单笔≤{MAX_RISK_PER_TRADE}U | 今日剩余{risk_remaining}次 ║")
+    mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
     if not TRADING_ENABLED:
         lines.append("║ 🔴 交易已暂停 | 发送 /start 恢复 ║")
     else:
-        lines.append("║ 🟢 自动交易中 | 发送 /status 查状态 ║")
+        lines.append(f"║ 🟢 自动交易中({mode_text}) | /status 查状态 ║")
     lines.append("╠══════════════════════════╣")
     lines.append("║ 💡 /help 查看遥控指令        ║")
     lines.append("╚══════════════════════════╝")
@@ -393,8 +418,9 @@ def run_strategy():
             continue
         size = place_order(c, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
         if size > 0:
+            prefix = "🧪 [模拟]" if DRY_RUN else "🔔 [实盘]"
             msg = f"""╔══════════════════════╗
-║  {'🟢' if direction == 'buy' else '🔴'} {direction.upper()} {c}  x{size}张
+║  {'🟢' if direction == 'buy' else '🔴'} {direction.upper()} {c}  x{size}张  {prefix}
 ╠══════════════════════╣
 ║ 📊 ADX:{adx:.1f} | RSI:{rsi:.1f}
 ║ 🧠 {strategy} | 止损{adaptive['stop_mult']}x
