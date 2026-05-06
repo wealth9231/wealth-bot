@@ -1,0 +1,7 @@
+{
+  "dry_run": true,
+  "max_risk_per_trade": 0.5,
+  "max_daily_trades": 3,
+  "allow_short": true,
+  "trading_enabled": true
+}
