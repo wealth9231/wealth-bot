@@ -143,31 +143,46 @@ def handle_command(text, update_id):
         send_telegram(response)
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
-def get_status_report():
+def fetch_real_balance():
+    """获取真实账户余额（模拟和实盘通用）"""
     try:
         balance = exchange.fetch_balance()
         usdt = balance.get('USDT', {})
-        total_equity = usdt.get('total', 0)
-        free_balance = usdt.get('free', 0)
-        positions = exchange.fetch_positions()
-        pos_list = [f"{p['symbol']}: {p['contracts']}张 盈亏{p.get('unrealizedPnl', 0):.2f}U" for p in positions if float(p.get('contracts', 0)) != 0]
-        pos_text = "\n".join(pos_list) if pos_list else "无持仓"
-        unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
-        mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
-        return f"""📊 状态 ({mode_text})
-权益: {total_equity:.2f}U | 浮动盈亏: {unrealized_pnl:+.2f}U
-可用: {free_balance:.2f}U
+        total = usdt.get('total', 0)
+        free = usdt.get('free', 0)
+        used = usdt.get('used', 0)
+        return total, free, used
+    except Exception as e:
+        print(f"获取余额失败: {e}")
+        return 0, 0, 0
+
+def fetch_real_positions():
+    """获取真实持仓（模拟和实盘通用）"""
+    try:
+        return exchange.fetch_positions()
+    except Exception as e:
+        print(f"获取持仓失败: {e}")
+        return []
+
+def get_status_report():
+    total, free, _ = fetch_real_balance()
+    positions = fetch_real_positions()
+    unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
+    pos_list = [f"{p['symbol']}: {p['contracts']}张 盈亏{p.get('unrealizedPnl', 0):.2f}U" for p in positions if float(p.get('contracts', 0)) != 0]
+    pos_text = "\n".join(pos_list) if pos_list else "无持仓"
+    mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
+    return f"""📊 状态 ({mode_text})
+权益: {total:.2f}U | 浮动盈亏: {unrealized_pnl:+.2f}U
+可用: {free:.2f}U
 今日开仓: {today_trades}/{MAX_DAILY_TRADES}
 持仓:
 {pos_text}"""
-    except Exception as e:
-        return f"❌ 获取状态失败: {e}"
 
 def close_all_positions():
     if DRY_RUN:
         send_telegram("🧪 [模拟] 一键清仓已触发")
         return
-    positions = exchange.fetch_positions()
+    positions = fetch_real_positions()
     for p in positions:
         contracts = abs(float(p.get('contracts', 0)))
         if contracts > 0:
@@ -196,8 +211,7 @@ def compute_adx(highs, lows, closes, period=14):
         atr_val = (atr_val * (period - 1) + tr_list[i]) / period
         plus_di = (plus_di * (period - 1) + plus_dm_list[i]) / period
         minus_di = (minus_di * (period - 1) + minus_dm_list[i]) / period
-    dx_sum = 0
-    count = 0
+    dx_sum, count = 0, 0
     for i in range(len(tr_list) - period, len(tr_list)):
         if atr_val == 0: continue
         pdi = plus_di / atr_val * 100
@@ -305,27 +319,16 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
 
 # ================== 市场简报 ==================
 def format_brief(coins_data):
+    total, free, _ = fetch_real_balance()
+    positions = fetch_real_positions()
+    unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
+    pnl_str = f"+{unrealized_pnl:.2f}" if unrealized_pnl >= 0 else f"{unrealized_pnl:.2f}"
+
     lines = []
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"📊 Wealth Bot · {time.strftime('%H:%M UTC')}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
-
-    # 获取真实账户余额和盈亏
-    try:
-        balance = exchange.fetch_balance()
-        usdt = balance.get('USDT', {})
-        total_equity = usdt.get('total', 0)
-        free_balance = usdt.get('free', 0)
-        positions = exchange.fetch_positions()
-        unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
-        if total_equity > 0:
-            pnl_str = f"+{unrealized_pnl:.2f}" if unrealized_pnl >= 0 else f"{unrealized_pnl:.2f}"
-            lines.append(f"💰 权益: {total_equity:.2f}U ({pnl_str}U) | 可用: {free_balance:.2f}U")
-        else:
-            lines.append("💰 账户数据获取中...")
-    except:
-        lines.append("💰 账户数据获取中...")
-
+    lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
 
     sorted_data = sorted(coins_data, key=lambda x: x['adx'], reverse=True)
