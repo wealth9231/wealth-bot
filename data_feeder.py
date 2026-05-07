@@ -76,6 +76,8 @@ def handle_command(text, update_id):
 
 def fetch_real_balance():
     if DRY_RUN:
+        return 500.0, 500.0, 0.0   # 直接硬编码，不再计算
+    if DRY_RUN:
         total_pnl = sum(p['pnl'] for p in simulated_positions.values())
         equity = 500.0 + total_pnl
         free = 500.0 - sum(p['qty'] * p['entry_price'] * CONTRACT_SIZES.get(p['symbol'], 0) / MAX_LEVERAGE for p in simulated_positions.values())
