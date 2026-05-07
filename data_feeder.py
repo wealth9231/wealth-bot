@@ -36,7 +36,7 @@ exchange = ccxt.gateio({
 })
 
 # ================== 风控参数 ==================
-ACCOUNT_BALANCE = 70.0
+ACCOUNT_BALANCE = 100.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.05
@@ -144,8 +144,8 @@ def handle_command(text, update_id):
 def fetch_real_balance():
     if DRY_RUN:
         total_pnl = sum(p['pnl'] for p in simulated_positions.values())
-        equity = 70.0 + total_pnl
-        free = 70.0 - sum(p['qty'] * p['entry_price'] * CONTRACT_SIZES.get(p['symbol'], 0) / MAX_LEVERAGE for p in simulated_positions.values())
+        equity = 100.0 + total_pnl
+        free = 100.0 - sum(p['qty'] * p['entry_price'] * CONTRACT_SIZES.get(p['symbol'], 0) / MAX_LEVERAGE for p in simulated_positions.values())
         return equity, max(free, 0), 0.0
     try:
         balance = exchange.fetch_balance({'type': 'swap'})
@@ -429,19 +429,14 @@ def format_brief(coins_data):
 
     return "\n".join(lines)
 
-# ================== 主策略（含调试日志） ==================
+# ================== 主策略 ==================
 def run_strategy():
     global today_trades
-    print("[DEBUG] run_strategy started")
-    
     check_telegram_commands()
-    
     if not TRADING_ENABLED:
-        print("[DEBUG] Trading disabled, exiting")
         send_telegram("⏸️ 交易已暂停，发送 /start 恢复")
         return
     if today_trades >= MAX_DAILY_TRADES:
-        print(f"[DEBUG] Daily trade limit reached: {today_trades}/{MAX_DAILY_TRADES}")
         send_telegram(f"⚠️ 今日已开仓 {MAX_DAILY_TRADES} 次，触发熔断")
         return
 
@@ -452,32 +447,24 @@ def run_strategy():
     for c in coins:
         if signals_sent >= 2:
             break
-        print(f"[DEBUG] Fetching {c} ...")
         data = get_klines(c)
         if not data:
-            print(f"[DEBUG] {c} data is None, skipping")
             continue
         all_data.append(data)
         adx, rsi, price = data['adx'], data['rsi'], data['price']
         atr, ema12, ema26 = data['atr'], data['ema12'], data['ema26']
         bb_lower, bb_upper = data['bb_lower'], data['bb_upper']
 
-        print(f"[DEBUG] {c} price={price:.6f} adx={adx:.1f} rsi={rsi:.1f} ema12={ema12:.2f} ema26={ema26:.2f}")
-
         if adx > 20:
             market_state, strategy = "趋势市", "趋势跟踪"
         elif adx < 15:
             market_state, strategy = "震荡市", "网格交易"
         else:
-            print(f"[DEBUG] {c} ADX in transition (15-20), skipping")
             continue
 
         adaptive = adaptive_parameters(adx, atr, price, market_state)
         if not adaptive:
-            print(f"[DEBUG] {c} adaptive_parameters returned None")
             continue
-
-        print(f"[DEBUG] {c} market_state={market_state} adaptive={adaptive}")
 
         if market_state == "趋势市":
             if ema12 > ema26 and price > ema12 and rsi < adaptive['rsi_buy_max']:
@@ -489,7 +476,6 @@ def run_strategy():
                 stop_loss = price + adaptive['stop_mult'] * atr
                 take_profit = price - adaptive['tp_mult'] * atr
             else:
-                print(f"[DEBUG] {c} 趋势市条件不满足 (ema12>{ema26}:{ema12>ema26}, price>ema12:{price>ema12}, rsi<buy_max:{rsi<adaptive['rsi_buy_max']})")
                 continue
         elif market_state == "震荡市":
             if price <= bb_lower * 1.02 and rsi < adaptive['rsi_buy_max']:
@@ -501,24 +487,18 @@ def run_strategy():
                 stop_loss = price + adaptive['stop_mult'] * atr
                 take_profit = price * 0.995
             else:
-                print(f"[DEBUG] {c} 震荡市条件不满足")
                 continue
         else:
             continue
 
         contract_size = CONTRACT_SIZES.get(c, 0)
         if contract_size == 0:
-            print(f"[DEBUG] {c} contract_size is 0")
             continue
         position_value = ACCOUNT_BALANCE * adaptive['position_pct']
         qty = position_value / (contract_size * price)
         max_qty = MAX_RISK_PER_TRADE / (abs(price - stop_loss) * contract_size)
         final_qty = int(min(qty, max_qty))
-        
-        print(f"[DEBUG] {c} position_value={position_value:.2f} qty={qty:.4f} max_qty={max_qty:.4f} final_qty={final_qty}")
-        
         if final_qty < 1:
-            print(f"[DEBUG] {c} final_qty < 1, skipping")
             continue
 
         size = place_order(c, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
@@ -543,11 +523,8 @@ def run_strategy():
                 break
 
     if signals_sent == 0 and all_data:
-        print("[DEBUG] No signals, sending brief")
         brief = format_brief(all_data)
         send_telegram(brief)
-    else:
-        print(f"[DEBUG] Signals sent: {signals_sent}, all_data count: {len(all_data)}")
 
 if __name__ == "__main__":
     init_db()
