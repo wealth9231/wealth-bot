@@ -36,7 +36,7 @@ exchange = ccxt.gateio({
 })
 
 # ================== 风控参数 ==================
-ACCOUNT_BALANCE = 200.0
+ACCOUNT_BALANCE = 70.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.05
@@ -330,7 +330,7 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
             'stop_loss': stop_loss,
             'take_profit': take_profit
         }
-        send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.2f} 止盈{take_profit:.2f}")
+        send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.6f} 止盈{take_profit:.6f}")
         return int(qty)
     try:
         exchange.set_leverage(leverage, symbol)
@@ -349,7 +349,7 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
         print(f"下单失败: {e}")
         return 0
 
-# ================== 市场简报 ==================
+# ================== 市场简报（美化版） ==================
 def format_brief(coins_data):
     current_prices = {d['symbol']: d['price'] for d in coins_data}
     update_simulated_pnl(current_prices)
@@ -361,20 +361,27 @@ def format_brief(coins_data):
     pnl_str = f"+{total_pnl:.2f}" if total_pnl >= 0 else f"{total_pnl:.2f}"
 
     lines = []
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"📊 Wealth Bot · {time.strftime('%H:%M UTC')}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
+    lines.append("╔══════════════════════╗")
+    lines.append(f"║   Wealth Bot 市场简报  ║")
+    lines.append(f"║   {time.strftime('%Y-%m-%d %H:%M UTC')}  ║")
+    lines.append("╚══════════════════════╝")
+    lines.append("")
+
+    lines.append("┌─ 📈 资产概览")
+    lines.append(f"│ 权益 {total:.2f}U   浮动 {pnl_str}U   可用 {free:.2f}U")
+    lines.append("└─────────────────────")
+    lines.append("")
 
     if DRY_RUN and simulated_positions:
-        lines.append("── 模拟持仓 ──")
+        lines.append("┌─ 🧪 模拟持仓")
         for symbol, pos in simulated_positions.items():
-            side_text = "多" if pos['direction'] == 'buy' else "空"
+            side_text = "🟢多" if pos['direction'] == 'buy' else "🔴空"
             pnl_str_pos = f"+{pos['pnl']:.4f}" if pos['pnl'] >= 0 else f"{pos['pnl']:.4f}"
-            lines.append(f"  {symbol} {side_text} {pos['qty']}张 盈亏{pnl_str_pos}U")
+            lines.append(f"│ {side_text} {symbol} {pos['qty']}张  盈亏{pnl_str_pos}U")
+        lines.append("└─────────────────────")
+        lines.append("")
 
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-
+    lines.append("┌─ 🔍 行情扫描")
     sorted_data = sorted(coins_data, key=lambda x: x['adx'], reverse=True)
     for d in sorted_data:
         symbol = d['symbol'].replace('/', '').replace('USDT', '')
@@ -384,16 +391,16 @@ def format_brief(coins_data):
         ema12, ema26 = d['ema12'], d['ema26']
 
         if adx > 40:
-            trend_icon, trend_text = "🔥", "强趋势"
+            trend = "🔥强趋势"
         elif adx > 25:
-            trend_icon, trend_text = "📈", "趋势"
+            trend = "📈趋势"
         elif adx < 20:
-            trend_icon, trend_text = "🔄", "震荡"
+            trend = "🔄震荡"
         else:
-            trend_icon, trend_text = "⏸️", "过渡"
+            trend = "⏸️过渡"
 
         direction = "多头" if ema12 > ema26 else ("空头" if ema12 < ema26 else "整理")
-        rsi_note = "⚠️超买" if rsi > 70 else ("💧超卖" if rsi < 30 else "")
+        rsi_note = "⚠️超买" if rsi > 70 else ("💧超卖" if rsi < 30 else "●")
 
         if price >= 1000:
             price_str = f"${price:,.2f}"
@@ -402,20 +409,24 @@ def format_brief(coins_data):
         else:
             price_str = f"${price:.6f}"
 
-        lines.append(f"{trend_icon} {symbol:<6} {price_str}")
-        lines.append(f"   {trend_text}·{direction} | ADX {adx:.1f} | RSI {rsi:.1f} {rsi_note}")
-        lines.append("")
+        lines.append(f"│")
+        lines.append(f"│  {trend} {symbol:<5} {price_str}")
+        lines.append(f"│  {direction}   ADX {adx:.1f}   RSI {rsi:.1f} {rsi_note}")
+    lines.append("└─────────────────────")
+    lines.append("")
 
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("┌─ 🛡️ 风控状态")
     risk_remaining = MAX_DAILY_TRADES - today_trades
-    lines.append(f"🛡️ 风控 | 单笔≤{MAX_RISK_PER_TRADE}U | 今日剩{risk_remaining}次")
-    mode_text = "🧪模拟" if DRY_RUN else "💰实盘"
+    lines.append(f"│ 单笔上限 ≤{MAX_RISK_PER_TRADE}U   今日剩{risk_remaining}次")
+    mode_text = "🧪 模拟" if DRY_RUN else "💰 实盘"
     if TRADING_ENABLED:
-        lines.append(f"🟢 交易中({mode_text}) | /status 查状态")
+        lines.append(f"│ 🟢 {mode_text}中  /status 查详情")
     else:
-        lines.append("🔴 已暂停 | /start 恢复")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append("💡 /help 遥控指令")
+        lines.append(f"│ 🔴 已暂停  /start 恢复")
+    lines.append("└─────────────────────")
+    lines.append("")
+    lines.append("💡 发送 /help 查看所有指令")
+
     return "\n".join(lines)
 
 # ================== 主策略（ADX阈值已放宽） ==================
