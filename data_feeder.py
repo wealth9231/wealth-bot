@@ -36,7 +36,7 @@ exchange = ccxt.gateio({
 })
 
 # ================== 风控参数 ==================
-ACCOUNT_BALANCE = 70.0
+ACCOUNT_BALANCE = 200.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.05
