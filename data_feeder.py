@@ -499,9 +499,9 @@ def run_strategy():
 ║ 📊 ADX:{adx:.1f} | RSI:{rsi:.1f}
 ║ 🧠 {strategy} | 止损{adaptive['stop_mult']}x
 ╠══════════════════════╣
-║ 💰 入场:{price:.2f}
-║ 🛑 止损:{stop_loss:.2f}
-║ 🎯 止盈:{take_profit:.2f}
+║ 💰 入场:{price:.6f}
+║ 🛑 止损:{stop_loss:.6f}
+║ 🎯 止盈:{take_profit:.6f}
 ╚══════════════════════╝"""
             send_telegram(msg)
             save_trade(c, direction, price, size)
