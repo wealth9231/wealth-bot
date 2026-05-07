@@ -55,6 +55,7 @@ CONTRACT_SIZES = {
 }
 
 today_trades = 0
+simulated_positions = {}
 
 # ================== 数据库 ==================
 def init_db():
@@ -141,9 +142,12 @@ def handle_command(text, update_id):
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def fetch_real_balance():
-    """获取账户余额（模拟模式直接返回70，实盘读API）"""
+    """获取账户余额（模拟模式返回70U+虚拟盈亏）"""
     if DRY_RUN:
-        return 70.0, 70.0, 0.0
+        total_pnl = sum(p['pnl'] for p in simulated_positions.values())
+        equity = 70.0 + total_pnl
+        free = 70.0 - sum(p['qty'] * p['entry_price'] * CONTRACT_SIZES.get(p['symbol'], 0) / MAX_LEVERAGE for p in simulated_positions.values())
+        return equity, max(free, 0), 0.0
     try:
         balance = exchange.fetch_balance({'type': 'swap'})
         usdt = balance.get('USDT', {})
@@ -160,13 +164,23 @@ def fetch_real_balance():
         return 0, 0, 0
 
 def fetch_real_positions():
-    """获取真实持仓（模拟模式返回空列表）"""
+    """获取持仓（模拟模式返回虚拟持仓）"""
     if DRY_RUN:
-        return []
+        return [{'symbol': p['symbol'], 'contracts': p['qty'], 'unrealizedPnl': p['pnl'], 'entryPrice': p['entry_price']} for p in simulated_positions.values()]
     try:
         return exchange.fetch_positions()
     except:
         return []
+
+def update_simulated_pnl(current_prices):
+    """用最新价格更新模拟持仓盈亏"""
+    for symbol, pos in list(simulated_positions.items()):
+        if symbol in current_prices:
+            price = current_prices[symbol]
+            if pos['direction'] == 'buy':
+                pos['pnl'] = (price - pos['entry_price']) * pos['qty'] * CONTRACT_SIZES.get(symbol, 0)
+            else:
+                pos['pnl'] = (pos['entry_price'] - price) * pos['qty'] * CONTRACT_SIZES.get(symbol, 0)
 
 def get_status_report():
     total, free, _ = fetch_real_balance()
@@ -183,7 +197,9 @@ def get_status_report():
 {pos_text}"""
 
 def close_all_positions():
+    global simulated_positions
     if DRY_RUN:
+        simulated_positions = {}
         send_telegram("🧪 [模拟] 一键清仓已触发")
         return
     positions = fetch_real_positions()
@@ -304,7 +320,17 @@ def adaptive_parameters(adx, atr, price, market_state):
 
 # ================== 下单（模拟/实盘自动切换） ==================
 def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
+    global simulated_positions
     if DRY_RUN:
+        simulated_positions[symbol] = {
+            'symbol': symbol,
+            'direction': side,
+            'entry_price': get_klines(symbol)['price'] if get_klines(symbol) else 0,
+            'qty': int(qty),
+            'pnl': 0.0,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit
+        }
         send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.2f} 止盈{take_profit:.2f}")
         return int(qty)
     try:
@@ -326,19 +352,30 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
 
 # ================== 市场简报 ==================
 def format_brief(coins_data):
+    # 用最新价格更新模拟盈亏
+    current_prices = {d['symbol']: d['price'] for d in coins_data}
+    update_simulated_pnl(current_prices)
+
     total, free, _ = fetch_real_balance()
     positions = fetch_real_positions()
     unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
-    pnl_str = f"+{unrealized_pnl:.2f}" if unrealized_pnl >= 0 else f"{unrealized_pnl:.2f}"
+    total_pnl = unrealized_pnl
+    pnl_str = f"+{total_pnl:.2f}" if total_pnl >= 0 else f"{total_pnl:.2f}"
 
     lines = []
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"📊 Wealth Bot · {time.strftime('%H:%M UTC')}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
-    if total > 0:
-        lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
-    else:
-        lines.append("💰 余额获取中（请确认合约账户已充值）")
+    lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
+
+    # 显示模拟持仓
+    if DRY_RUN and simulated_positions:
+        lines.append("── 模拟持仓 ──")
+        for symbol, pos in simulated_positions.items():
+            side_text = "多" if pos['direction'] == 'buy' else "空"
+            pnl_str_pos = f"+{pos['pnl']:.4f}" if pos['pnl'] >= 0 else f"{pos['pnl']:.4f}"
+            lines.append(f"  {symbol} {side_text} {pos['qty']}张 盈亏{pnl_str_pos}U")
+
     lines.append("━━━━━━━━━━━━━━━━━━━━")
 
     sorted_data = sorted(coins_data, key=lambda x: x['adx'], reverse=True)
