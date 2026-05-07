@@ -1,7 +1,7 @@
 {
   "dry_run": true,
-  "max_risk_per_trade": 0.5,
-  "max_daily_trades": 3,
+  "max_risk_per_trade": 0.8,
+  "max_daily_trades": 5,
   "allow_short": true,
   "trading_enabled": true,
   "simulated_balance": 70.0
