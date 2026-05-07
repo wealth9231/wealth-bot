@@ -19,8 +19,8 @@ def load_config():
     except:
         return {
             "dry_run": True,
-            "max_risk_per_trade": 0.5,
-            "max_daily_trades": 3,
+            "max_risk_per_trade": 0.8,
+            "max_daily_trades": 5,
             "allow_short": True,
             "trading_enabled": True
         }
@@ -39,7 +39,7 @@ exchange = ccxt.gateio({
 ACCOUNT_BALANCE = 70.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
-TARGET_PROFIT_PCT = 0.03
+TARGET_PROFIT_PCT = 0.05
 MAX_DAILY_TRADES = config["max_daily_trades"]
 
 TRADING_ENABLED = config["trading_enabled"]
@@ -142,7 +142,6 @@ def handle_command(text, update_id):
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def fetch_real_balance():
-    """获取账户余额（模拟模式返回70U+虚拟盈亏）"""
     if DRY_RUN:
         total_pnl = sum(p['pnl'] for p in simulated_positions.values())
         equity = 70.0 + total_pnl
@@ -164,7 +163,6 @@ def fetch_real_balance():
         return 0, 0, 0
 
 def fetch_real_positions():
-    """获取持仓（模拟模式返回虚拟持仓）"""
     if DRY_RUN:
         return [{'symbol': p['symbol'], 'contracts': p['qty'], 'unrealizedPnl': p['pnl'], 'entryPrice': p['entry_price']} for p in simulated_positions.values()]
     try:
@@ -173,7 +171,6 @@ def fetch_real_positions():
         return []
 
 def update_simulated_pnl(current_prices):
-    """用最新价格更新模拟持仓盈亏"""
     for symbol, pos in list(simulated_positions.items()):
         if symbol in current_prices:
             price = current_prices[symbol]
@@ -288,24 +285,24 @@ def get_klines(symbol):
         print(f"获取 {symbol} K线失败: {e}")
         return None
 
-# ================== 参数自适应 ==================
+# ================== 参数自适应（已放宽） ==================
 def adaptive_parameters(adx, atr, price, market_state):
     atr_pct = atr / price if price > 0 else 0.01
     if market_state == "趋势市":
         if adx > 40:
             stop_mult, tp_mult, position_pct = 2.5, 3.5, TARGET_PROFIT_PCT * 1.3
-            rsi_buy_max, rsi_sell_min, min_rr = 75, 25, 1.3
+            rsi_buy_max, rsi_sell_min, min_rr = 75, 25, 1.1
         elif adx > 30:
             stop_mult, tp_mult, position_pct = 2.0, 3.0, TARGET_PROFIT_PCT
-            rsi_buy_max, rsi_sell_min, min_rr = 70, 30, 1.5
+            rsi_buy_max, rsi_sell_min, min_rr = 70, 30, 1.2
         else:
             stop_mult, tp_mult, position_pct = 1.5, 2.5, TARGET_PROFIT_PCT * 0.7
-            rsi_buy_max, rsi_sell_min, min_rr = 65, 35, 1.8
+            rsi_buy_max, rsi_sell_min, min_rr = 65, 35, 1.3
     elif market_state == "震荡市":
         if atr_pct < 0.01:
-            stop_mult, position_pct, min_rr = 1.2, TARGET_PROFIT_PCT * 1.5, 1.1
+            stop_mult, position_pct, min_rr = 1.2, TARGET_PROFIT_PCT * 2.0, 1.0
         else:
-            stop_mult, position_pct, min_rr = 1.5, TARGET_PROFIT_PCT, 1.2
+            stop_mult, position_pct, min_rr = 1.5, TARGET_PROFIT_PCT * 1.5, 1.0
         tp_mult, rsi_buy_max, rsi_sell_min = 0, 40, 60
     else:
         return None
@@ -318,14 +315,16 @@ def adaptive_parameters(adx, atr, price, market_state):
         'min_rr': min_rr
     }
 
-# ================== 下单（模拟/实盘自动切换） ==================
+# ================== 下单 ==================
 def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
     global simulated_positions
     if DRY_RUN:
+        kline = get_klines(symbol)
+        entry_price = kline['price'] if kline else 0
         simulated_positions[symbol] = {
             'symbol': symbol,
             'direction': side,
-            'entry_price': get_klines(symbol)['price'] if get_klines(symbol) else 0,
+            'entry_price': entry_price,
             'qty': int(qty),
             'pnl': 0.0,
             'stop_loss': stop_loss,
@@ -352,7 +351,6 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
 
 # ================== 市场简报 ==================
 def format_brief(coins_data):
-    # 用最新价格更新模拟盈亏
     current_prices = {d['symbol']: d['price'] for d in coins_data}
     update_simulated_pnl(current_prices)
 
@@ -368,7 +366,6 @@ def format_brief(coins_data):
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"💰 权益: {total:.2f}U ({pnl_str}U) | 可用: {free:.2f}U")
 
-    # 显示模拟持仓
     if DRY_RUN and simulated_positions:
         lines.append("── 模拟持仓 ──")
         for symbol, pos in simulated_positions.items():
@@ -421,7 +418,7 @@ def format_brief(coins_data):
     lines.append("💡 /help 遥控指令")
     return "\n".join(lines)
 
-# ================== 主策略 ==================
+# ================== 主策略（ADX阈值已放宽） ==================
 def run_strategy():
     global today_trades
     check_telegram_commands()
@@ -447,9 +444,9 @@ def run_strategy():
         atr, ema12, ema26 = data['atr'], data['ema12'], data['ema26']
         bb_lower, bb_upper = data['bb_lower'], data['bb_upper']
 
-        if adx > 25:
+        if adx > 20:
             market_state, strategy = "趋势市", "趋势跟踪"
-        elif adx < 20:
+        elif adx < 15:
             market_state, strategy = "震荡市", "网格交易"
         else:
             continue
