@@ -75,13 +75,9 @@ def handle_command(text, update_id):
     if response: send_telegram(response); requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def fetch_real_balance():
+    """模拟模式直接返回500U（硬编码）"""
     if DRY_RUN:
-        return 500.0, 500.0, 0.0   # 直接硬编码，不再计算
-    if DRY_RUN:
-        total_pnl = sum(p['pnl'] for p in simulated_positions.values())
-        equity = 500.0 + total_pnl
-        free = 500.0 - sum(p['qty'] * p['entry_price'] * CONTRACT_SIZES.get(p['symbol'], 0) / MAX_LEVERAGE for p in simulated_positions.values())
-        return equity, max(free, 0), 0.0
+        return 500.0, 500.0, 0.0
     try:
         b = exchange.fetch_balance({'type': 'swap'}); usdt = b.get('USDT', {})
         return usdt.get('total', 0), usdt.get('free', 0), 0.0
@@ -197,6 +193,21 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
 def format_signal_card(symbol, direction, market_state, price, adx, rsi, stop_loss, take_profit, qty, strategy, adaptive_info):
     arrow = "🟢" if direction == 'buy' else "🔴"
     dir_text = "做多" if direction == 'buy' else "做空"
+    
+    # 当前浮动盈亏
+    pnl = 0.0
+    if symbol in simulated_positions:
+        pnl = simulated_positions[symbol].get('pnl', 0.0)
+    pnl_str = f"+{pnl:.4f}U" if pnl >= 0 else f"{pnl:.4f}U"
+    
+    # 持仓额度（保证金）
+    contract_size = CONTRACT_SIZES.get(symbol, 0)
+    if contract_size > 0 and price > 0:
+        margin = (qty * price * contract_size) / MAX_LEVERAGE
+        margin_str = f"{margin:.2f}U"
+    else:
+        margin_str = "计算中"
+    
     return f"""
 ┌─────────────────────────
 │ {arrow} {dir_text} {symbol} × {qty}张  🧪模拟
@@ -207,6 +218,9 @@ def format_signal_card(symbol, direction, market_state, price, adx, rsi, stop_lo
 │ 💰 入场 {price:.6f}
 │ 🛑 止损 {stop_loss:.6f}
 │ 🎯 止盈 {take_profit:.6f}
+├─────────────────────────
+│ 📈 浮动盈亏 {pnl_str}
+│ 💎 持仓额度 {margin_str}
 └─────────────────────────"""
 
 def format_brief(coins_data):
