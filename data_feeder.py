@@ -24,16 +24,30 @@ exchange = ccxt.gateio({'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimi
 ACCOUNT_BALANCE = 500.0
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
-TARGET_PROFIT_PCT = 0.06
+TARGET_PROFIT_PCT = 0.08
 MAX_DAILY_TRADES = config["max_daily_trades"]
 TRADING_ENABLED = config["trading_enabled"]
 ALLOW_SHORT = config["allow_short"]
 DRY_RUN = config["dry_run"]
 
-CONTRACT_SIZES = {'HOT/USDT': 10000, 'DOGE/USDT': 100, 'RACA/USDT': 10000, 'PEPE/USDT': 100000}
+# ================== 合约面值（扩展后） ==================
+CONTRACT_SIZES = {
+    'HOT/USDT': 10000,
+    'DOGE/USDT': 100,
+    'RACA/USDT': 10000,
+    'PEPE/USDT': 100000,
+    'BONK/USDT': 1000000,
+    'FLOKI/USDT': 10000,
+    'SHIB/USDT': 100000,
+    'LUNC/USDT': 10000,
+    '1000XEC/USDT': 1000,
+    '1000LUNC/USDT': 1000,
+}
+
 today_trades = 0
 simulated_positions = {}
 
+# ================== 数据库 ==================
 def init_db():
     conn = sqlite3.connect('trades.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, direction TEXT, entry_price REAL, exit_price REAL, qty REAL, pnl REAL, entry_time TEXT, exit_time TEXT, status TEXT)''')
@@ -46,6 +60,7 @@ def save_trade(symbol, direction, entry_price, qty):
     conn.commit()
     conn.close()
 
+# ================== Telegram 推送 ==================
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -54,6 +69,7 @@ def send_telegram(message):
     except:
         pass
 
+# ================== 远程指令 ==================
 def check_telegram_commands():
     if not TELEGRAM_TOKEN:
         return
@@ -97,6 +113,7 @@ def handle_command(text, update_id):
         send_telegram(response)
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
+# ================== 余额和持仓 ==================
 def fetch_real_balance():
     if DRY_RUN:
         return 500.0, 500.0, 0.0
@@ -142,6 +159,7 @@ def close_all_positions():
         if abs(float(p.get('contracts', 0))) > 0:
             exchange.create_order(p['symbol'], 'market', 'sell' if float(p['contracts']) > 0 else 'buy', abs(float(p['contracts'])), None, {'reduce_only': True})
 
+# ================== 指标计算 ==================
 def compute_adx(highs, lows, closes, period=14):
     n = len(closes)
     if n < period + 1:
@@ -222,15 +240,16 @@ def get_klines(symbol):
     except:
         return None
 
+# ================== 参数自适应 ==================
 def adaptive_parameters(adx, atr, price, market_state):
     atr_pct = atr / price if price > 0 else 0.01
     if market_state == "趋势市":
         if adx > 40:
-            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.5, 3.5, TARGET_PROFIT_PCT*1.3, 75, 25, 1.1
+            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.5, 3.5, TARGET_PROFIT_PCT*1.3, 75, 25, 1.05
         elif adx > 30:
-            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.0, 3.0, TARGET_PROFIT_PCT, 70, 30, 1.2
+            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.0, 3.0, TARGET_PROFIT_PCT, 70, 30, 1.05
         else:
-            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 1.5, 2.5, TARGET_PROFIT_PCT*0.7, 65, 35, 1.3
+            stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 1.5, 2.5, TARGET_PROFIT_PCT*0.7, 65, 35, 1.05
     elif market_state == "震荡市":
         if atr_pct < 0.01:
             stop_mult, position_pct, min_rr = 1.2, TARGET_PROFIT_PCT*2.0, 1.0
@@ -248,6 +267,7 @@ def adaptive_parameters(adx, atr, price, market_state):
         'min_rr': min_rr,
     }
 
+# ================== 下单 ==================
 def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
     global simulated_positions
     if DRY_RUN:
@@ -276,6 +296,7 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
     except:
         return 0
 
+# ================== 信号卡片 ==================
 def format_signal_card(symbol, direction, market_state, price, adx, rsi, stop_loss, take_profit, qty, strategy, adaptive_info):
     arrow = "🟢" if direction == 'buy' else "🔴"
     dir_text = "做多" if direction == 'buy' else "做空"
@@ -316,6 +337,7 @@ def format_signal_card(symbol, direction, market_state, price, adx, rsi, stop_lo
 📋 总浮动盈亏 {total_pnl_str}
 """
 
+# ================== 市场简报 ==================
 def format_brief(coins_data):
     current_prices = {d['symbol']: d['price'] for d in coins_data}
     update_simulated_pnl(current_prices)
@@ -375,6 +397,7 @@ def format_brief(coins_data):
     lines.append("💡 /help 查看指令")
     return "\n".join(lines)
 
+# ================== 主策略（10币种） ==================
 def run_strategy():
     global today_trades
     check_telegram_commands()
@@ -385,12 +408,14 @@ def run_strategy():
         send_telegram(f"⚠️ 今日已满 {MAX_DAILY_TRADES} 次")
         return
 
-    coins = ['HOT/USDT', 'DOGE/USDT', 'RACA/USDT', 'PEPE/USDT']
+    coins = ['HOT/USDT', 'DOGE/USDT', 'RACA/USDT', 'PEPE/USDT',
+             'BONK/USDT', 'FLOKI/USDT', 'SHIB/USDT', 'LUNC/USDT',
+             '1000XEC/USDT', '1000LUNC/USDT']
     all_data = []
     signals_sent = 0
 
     for c in coins:
-        if signals_sent >= 2:
+        if signals_sent >= 3:          # 最多开3个不同币种
             break
         data = get_klines(c)
         if not data:
@@ -400,7 +425,7 @@ def run_strategy():
         atr, ema12, ema26 = data['atr'], data['ema12'], data['ema26']
         bb_lower, bb_upper = data['bb_lower'], data['bb_upper']
 
-        if adx > 20:
+        if adx > 18:
             market_state, strategy = "趋势市", "趋势跟踪"
         elif adx < 15:
             market_state, strategy = "震荡市", "网格交易"
