@@ -1,0 +1,40 @@
+name: Gate.io Trading Bot
+
+on:
+  workflow_dispatch:  # 支持手动触发 + 腾讯元宝定时触发
+  schedule:
+    - cron: '*/15 * * * *'  # 每15分钟运行一次（GitHub Actions原生定时，备用）
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14  # 15分钟调度间隔，留1分钟缓冲
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+
+      - name: 运行交易机器人
+        env:
+          GATE_API_KEY: ${{ secrets.GATE_API_KEY }}
+          GATE_SECRET: ${{ secrets.GATE_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python gate_trading_bot.py
+
+      - name: 上传日志（失败时进行）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-log
+          path: trading_bot.log

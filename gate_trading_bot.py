@@ -19,34 +19,31 @@ from datetime import datetime
 from typing import Dict, Tuple, Optional
 
 # ==================== 配置部分 ====================
+import os
 
-# API密钥配置 (请替换为你的实际密钥)
-GATE_API_KEY = "bf76ef165158c1ac42512d4849326b41"  # 替换为你的Gate.io API Key
-GATE_SECRET = "a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12"    # 替换为你的Gate.io Secret
-
-# 交易配置
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]  # 交易对列表
-TIMEFRAME = "15m"            # K线周期
-LEVERAGE = 1                 # 杠杆倍数 (首次测试用1倍，现货交易)
-MAX_POSITION = 0.0005        # 最大持仓量 (BTC) (约40 USDT，极小仓位测试)
-STOP_LOSS_PCT = -0.015       # 止损百分比 (-1.5%，更严格的保护)
-MIN_RR_RATIO = 1.5          # 最小盈亏比
-TARGET_PROFIT_PCT = 0.02    # 目标利润 (2%，更容易达到)
-
-# 网格交易配置
-GRID_NUM = 10                # 网格数量
-GRID_PRICE_RANGE = 0.02     # 网格价格范围 (±2%)
-
-# 策略参数
-TREND_ADX_THRESHOLD = 25    # ADX趋势判断阈值
-RSI_OVERSOLD = 30           # RSI超卖阈值
-RSI_OVERBOUGHT = 70         # RSI超买阈值
-BB_WIDTH_THRESHOLD = 0.05   # 布林带宽度阈值 (判断震荡/趋势)
-
-# Telegram通知配置
-TELEGRAM_ENABLED = True                # 是否启用Telegram通知
-TELEGRAM_BOT_TOKEN = "8746796223:AAGGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg"   # Telegram Bot Token (从@BotFather获取)
-TELEGRAM_CHAT_ID = "6204659239"      # 接收通知的Chat ID
+# 从config.py读取配置（优先使用环境变量）
+try:
+    from config import *
+except ImportError:
+    # 如果config.py不存在，使用默认值
+    GATE_API_KEY = os.getenv('GATE_API_KEY', "bf76ef165158c1ac42512d4849326b41")
+    GATE_SECRET = os.getenv('GATE_SECRET', "a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12")
+    SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]
+    TIMEFRAME = "15m"
+    LEVERAGE = 1
+    MAX_POSITION = 0.0005
+    STOP_LOSS_PCT = -0.015
+    MIN_RR_RATIO = 1.5
+    TARGET_PROFIT_PCT = 0.02
+    GRID_NUM = 10
+    GRID_PRICE_RANGE = 0.02
+    TREND_ADX_THRESHOLD = 25
+    RSI_OVERSOLD = 30
+    RSI_OVERBOUGHT = 70
+    BB_WIDTH_THRESHOLD = 0.05
+    TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'True').lower() == 'true'
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg")
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
