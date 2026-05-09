@@ -21,7 +21,7 @@ def load_config():
 config = load_config()
 exchange = ccxt.gateio({'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
 
-ACCOUNT_BALANCE = 300.0
+ACCOUNT_BALANCE = config.get("simulated_balance", 500.0)  # 从配置文件读取模拟本金
 MAX_LEVERAGE = 4
 MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
 TARGET_PROFIT_PCT = 0.10
@@ -148,16 +148,31 @@ def compute_rsi(closes, period=14):
     if avg_loss == 0: return 50
     return 100 - (100 / (1 + avg_gain / avg_loss))
 
+def calculate_ema(prices, period):
+    """计算指数移动平均(EMA)"""
+    if len(prices) < period:
+        return sum(prices) / len(prices)
+    # 初始值用SMA
+    ema = sum(prices[:period]) / period
+    multiplier = 2 / (period + 1)
+    # EMA_today = Price_today * multiplier + EMA_yesterday * (1 - multiplier)
+    for price in prices[period:]:
+        ema = price * multiplier + ema * (1 - multiplier)
+    return ema
+
 def get_klines(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
         if not ohlcv or len(ohlcv) < 50: return None
         closes = [c[4] for c in ohlcv]; highs = [c[2] for c in ohlcv]; lows = [c[3] for c in ohlcv]
         price = closes[-1]
-        ema12 = sum(closes[-12:]) / 12; ema26 = sum(closes[-26:]) / 26
+        ema12 = calculate_ema(closes, 12); ema26 = calculate_ema(closes, 26)
         adx = compute_adx(highs, lows, closes); rsi = compute_rsi(closes)
-        tr_list = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, min(15, len(closes)))]
-        atr = sum(tr_list) / len(tr_list) if tr_list else 0
+        tr_list = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, len(closes))]
+        atr = sum(tr_list[-14:]) / 14 if len(tr_list) >= 14 else (sum(tr_list) / len(tr_list) if tr_list else 0.000001)
+        # 确保ATR不为0（至少设为最小价格变动单位）
+        if atr == 0:
+            atr = price * 0.001  # 默认设为价格的0.1%
         middle = sum(closes[-20:]) / 20; std = (sum([(x-middle)**2 for x in closes[-20:]]) / 20) ** 0.5
         return {'symbol': symbol, 'price': price, 'ema12': ema12, 'ema26': ema26, 'adx': adx, 'rsi': rsi, 'atr': atr, 'bb_lower': middle - 2*std, 'bb_upper': middle + 2*std}
     except: return None
@@ -165,13 +180,17 @@ def get_klines(symbol):
 def adaptive_parameters(adx, atr, price, market_state):
     atr_pct = atr / price if price > 0 else 0.01
     if market_state == "趋势市":
-        if adx > 40: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.5, 3.5, TARGET_PROFIT_PCT*1.3, 75, 25, 1.0
-        elif adx > 30: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.0, 3.0, TARGET_PROFIT_PCT, 70, 30, 1.0
-        else: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 1.5, 2.5, TARGET_PROFIT_PCT*0.7, 65, 35, 1.0
+        # 放宽RSI过滤：做多<80（原75），做空>20（原25）
+        if adx > 40: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.5, 3.5, TARGET_PROFIT_PCT*1.3, 80, 20, 1.0
+        # 放宽RSI过滤：做多<75（原70），做空>25（原30）
+        elif adx > 30: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 2.0, 3.0, TARGET_PROFIT_PCT, 75, 25, 1.0
+        # 放宽RSI过滤：做多<70（原65），做空>30（原35）
+        else: stop_mult, tp_mult, position_pct, rsi_buy, rsi_sell, min_rr = 1.5, 2.5, TARGET_PROFIT_PCT*0.7, 70, 30, 1.0
     elif market_state == "震荡市":
         if atr_pct < 0.01: stop_mult, position_pct, min_rr = 1.2, TARGET_PROFIT_PCT*2.0, 1.0
         else: stop_mult, position_pct, min_rr = 1.5, TARGET_PROFIT_PCT*1.5, 1.0
-        tp_mult, rsi_buy, rsi_sell = 0, 40, 60
+        # 放宽震荡市RSI过滤：做多<50（原40），做空>50（原60）
+        tp_mult, rsi_buy, rsi_sell = 0, 50, 50
     else: return None
     return {'stop_mult': stop_mult, 'tp_mult': tp_mult, 'position_pct': position_pct, 'rsi_buy_max': rsi_buy, 'rsi_sell_min': rsi_sell, 'min_rr': min_rr}
 
@@ -311,8 +330,8 @@ def run_strategy():
         adx, rsi, price = data['adx'], data['rsi'], data['price']
         atr, ema12, ema26 = data['atr'], data['ema12'], data['ema26']
         bb_lower, bb_upper = data['bb_lower'], data['bb_upper']
-        if adx > 18: market_state, strategy = "趋势市", "趋势跟踪"
-        elif adx < 15: market_state, strategy = "震荡市", "网格交易"
+        if adx > 15: market_state, strategy = "趋势市", "趋势跟踪"  # 降低ADX阈值从18到15
+        elif adx < 12: market_state, strategy = "震荡市", "网格交易"  # 降低震荡市阈值从15到12
         else: continue
 
         adaptive = adaptive_parameters(adx, atr, price, market_state)
@@ -325,10 +344,11 @@ def run_strategy():
                 direction, stop_loss, take_profit = "sell", price + adaptive['stop_mult'] * atr, price - adaptive['tp_mult'] * atr
             else: continue
         elif market_state == "震荡市":
-            if price <= bb_lower * 1.02 and rsi < adaptive['rsi_buy_max']:
-                direction, stop_loss, take_profit = "buy", price - adaptive['stop_mult'] * atr, price * 1.005
-            elif price >= bb_upper * 0.98 and rsi > adaptive['rsi_sell_min'] and ALLOW_SHORT:
-                direction, stop_loss, take_profit = "sell", price + adaptive['stop_mult'] * atr, price * 0.995
+            # 放宽触发条件：价格接近布林带即可（1.05倍），不再要求必须突破
+            if price <= bb_lower * 1.05 and rsi < adaptive['rsi_buy_max']:
+                direction, stop_loss, take_profit = "buy", price - adaptive['stop_mult'] * atr, bb_upper  # 止盈目标设为上轨
+            elif price >= bb_upper * 0.95 and rsi > adaptive['rsi_sell_min'] and ALLOW_SHORT:
+                direction, stop_loss, take_profit = "sell", price + adaptive['stop_mult'] * atr, bb_lower  # 止盈目标设为下轨
             else: continue
         else: continue
 
@@ -339,7 +359,13 @@ def run_strategy():
         max_qty = MAX_RISK_PER_TRADE / (abs(price - stop_loss) * contract_size)
         final_qty = int(min(qty, max_qty))
         if final_qty < 1: continue
-
+        
+        # 风报比过滤
+        risk = abs(price - stop_loss)
+        reward = abs(take_profit - price)
+        if risk == 0 or (reward / risk) < adaptive['min_rr']:
+            continue  # 风报比不达标，跳过信号
+        
         # 手续费过滤
         expected_profit = abs(take_profit - price) * final_qty * contract_size
         fee_cost = 2 * price * final_qty * contract_size * FEE_RATE
