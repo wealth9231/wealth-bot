@@ -21,35 +21,24 @@ def load_config():
 config = load_config()
 exchange = ccxt.gateio({'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
 
-ACCOUNT_BALANCE = 300.0            # ← 本金调整为 300U
+ACCOUNT_BALANCE = 300.0
 MAX_LEVERAGE = 4
-MAX_RISK_PER_TRADE = config["max_risk_per_trade"]   # 2.0U
-TARGET_PROFIT_PCT = 0.10           # ← 仓位比例提高至 10%
+MAX_RISK_PER_TRADE = config["max_risk_per_trade"]
+TARGET_PROFIT_PCT = 0.10
 MAX_DAILY_TRADES = config["max_daily_trades"]
 TRADING_ENABLED = config["trading_enabled"]
 ALLOW_SHORT = config["allow_short"]
 DRY_RUN = config["dry_run"]
 
-# ================== 高波动币种 + 合约面值 ==================
 CONTRACT_SIZES = {
-    'BTC/USDT': 0.0001,
-    'ETH/USDT': 0.01,
-    'BNB/USDT': 0.01,
-    'SOL/USDT': 1,
-    'DOGE/USDT': 100,
-    'LTC/USDT': 1,
-    'LINK/USDT': 1,
-    'AVAX/USDT': 1,
-    'ATOM/USDT': 1,
+    'BTC/USDT': 0.0001, 'ETH/USDT': 0.01, 'BNB/USDT': 0.01, 'SOL/USDT': 1,
+    'DOGE/USDT': 100, 'LTC/USDT': 1, 'LINK/USDT': 1, 'AVAX/USDT': 1, 'ATOM/USDT': 1,
 }
 
-# 手续费率（Gate.io taker rate）
 FEE_RATE = 0.0004
-
 today_trades = 0
 simulated_positions = {}
 
-# ================== 数据库 ==================
 def init_db():
     conn = sqlite3.connect('trades.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, direction TEXT, entry_price REAL, exit_price REAL, qty REAL, pnl REAL, entry_time TEXT, exit_time TEXT, status TEXT)''')
@@ -91,7 +80,7 @@ def handle_command(text, update_id):
     if response: send_telegram(response); requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params={'offset': update_id + 1, 'timeout': 1})
 
 def fetch_real_balance():
-    if DRY_RUN: return 300.0, 300.0, 0.0   # ← 模拟本金 300
+    if DRY_RUN: return 300.0, 300.0, 0.0
     try:
         b = exchange.fetch_balance({'type': 'swap'}); usdt = b.get('USDT', {})
         return usdt.get('total', 0), usdt.get('free', 0), 0.0
@@ -112,9 +101,9 @@ def update_simulated_pnl(current_prices):
 def get_status_report():
     total, free, _ = fetch_real_balance(); positions = fetch_real_positions()
     unrealized_pnl = sum(float(p.get('unrealizedPnl', 0)) for p in positions)
-    pos_list = [f"  {p['symbol']} {p['contracts']}张 盈亏{p.get('unrealizedPnl', 0):.8f}U" for p in positions if float(p.get('contracts', 0)) != 0]
+    pos_list = [f"  {p['symbol']} {p['contracts']}张 盈亏{p.get('unrealizedPnl', 0):.6f}U" for p in positions if float(p.get('contracts', 0)) != 0]
     pos_text = "\n".join(pos_list) if pos_list else "  无持仓"
-    return f"📊 Wealth Bot {'🧪模拟' if DRY_RUN else '💰实盘'}\n💰 权益 {total:.2f}U | 浮动 {unrealized_pnl:+.8f}U\n📋 今日 {today_trades}/{MAX_DAILY_TRADES} 次\n{pos_text}"
+    return f"📊 Wealth Bot {'🧪模拟' if DRY_RUN else '💰实盘'}\n💰 权益 {total:.2f}U | 浮动 {unrealized_pnl:+.6f}U\n📋 今日 {today_trades}/{MAX_DAILY_TRADES} 次\n{pos_text}"
 
 def close_all_positions():
     global simulated_positions
@@ -195,7 +184,7 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
             'symbol': symbol, 'direction': side, 'entry_price': entry_price,
             'qty': int(qty), 'pnl': 0.0, 'stop_loss': stop_loss, 'take_profit': take_profit
         }
-        send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.8f} 止盈{take_profit:.8f}")
+        send_telegram(f"🧪 [模拟] {side.upper()} {symbol} {int(qty)}张 止损{stop_loss:.4f} 止盈{take_profit:.4f}")
         return int(qty)
     try:
         exchange.set_leverage(leverage, symbol); order_size = max(int(qty), 1)
@@ -206,23 +195,46 @@ def place_order(symbol, side, qty, leverage, stop_loss, take_profit):
     except: return 0
 
 def format_signal_card(symbol, direction, market_state, price, adx, rsi, stop_loss, take_profit, qty, strategy, adaptive_info):
-    arrow = "🟢" if direction == 'buy' else "🔴"; dir_text = "做多" if direction == 'buy' else "做空"
+    arrow = "🟢" if direction == 'buy' else "🔴"
+    dir_text = "做多" if direction == 'buy' else "做空"
+    
+    # 强制从 Gate.io 获取当前最新价格
     kline = get_klines(symbol)
     current_price = kline['price'] if kline else price
     price_change = ((current_price - price) / price * 100) if price > 0 else 0
     price_str = f"{current_price:.4f} ({price_change:+.2f}%)"
-    pnl = 0.0
-    if symbol in simulated_positions: pnl = simulated_positions[symbol].get('pnl', 0.0)
+    
+    # 用最新价格重新计算盈亏
+    contract_size = CONTRACT_SIZES.get(symbol, 0)
+    if contract_size > 0 and current_price > 0:
+        if direction == 'buy':
+            pnl = (current_price - price) * qty * contract_size
+        else:
+            pnl = (price - current_price) * qty * contract_size
+    else:
+        pnl = 0.0
+    
+    # 更新到 simulated_positions 里
+    if symbol in simulated_positions:
+        simulated_positions[symbol]['pnl'] = pnl
+        simulated_positions[symbol]['entry_price'] = price
+    
     pnl_str = f"+{pnl:.6f}U" if pnl >= 0 else f"{pnl:.6f}U"
+    
     total_pnl = sum(p['pnl'] for p in simulated_positions.values())
     total_pnl_str = f"+{total_pnl:.6f}U" if total_pnl >= 0 else f"{total_pnl:.6f}U"
-    contract_size = CONTRACT_SIZES.get(symbol, 0)
-    if contract_size > 0 and price > 0: margin = (qty * price * contract_size) / MAX_LEVERAGE; margin_str = f"{margin:.2f}U"
-    else: margin_str = "计算中"
-    # 预期盈利计算
+    
+    if contract_size > 0 and price > 0:
+        margin = (qty * price * contract_size) / MAX_LEVERAGE
+        margin_str = f"{margin:.2f}U"
+    else:
+        margin_str = "计算中"
+    
+    # 预期净利润
     expected_profit = abs(take_profit - price) * qty * contract_size
     fee_cost = 2 * price * qty * contract_size * FEE_RATE
     net_profit = expected_profit - fee_cost
+    
     return f"""
 {arrow} {dir_text} {symbol} × {qty}张  🧪模拟
 
@@ -328,10 +340,10 @@ def run_strategy():
         final_qty = int(min(qty, max_qty))
         if final_qty < 1: continue
 
-        # 手续费过滤：预期盈利必须大于手续费成本
+        # 手续费过滤
         expected_profit = abs(take_profit - price) * final_qty * contract_size
         fee_cost = 2 * price * final_qty * contract_size * FEE_RATE
-        if expected_profit < fee_cost * 1.2:  # 预期盈利至少要覆盖手续费且有20%空间
+        if expected_profit < fee_cost * 1.2:
             continue
 
         size = place_order(c, direction, final_qty, MAX_LEVERAGE, stop_loss, take_profit)
