@@ -8,7 +8,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 14  # 15分钟调度间隔，留1分钟缓冲
+    timeout-minutes: 10  # 每次运行应在几分钟内完成
 
     steps:
       - name: 检出代码

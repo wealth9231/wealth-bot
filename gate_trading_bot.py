@@ -129,10 +129,8 @@ class ExchangeAPI:
             订单信息字典
         """
         try:
-            if order_type == 'market':
-                order = self.exchange.create_market_order(symbol, side, amount)
-            else:
-                order = self.exchange.create_limit_order(symbol, side, amount, price)
+            # CCXT正确用法: create_order(symbol, type, side, amount, price, params)
+            order = self.exchange.create_order(symbol, order_type, side, amount, price)
             logger.info(f"订单创建成功: {side} {amount} {symbol} @ {price if price else 'market'}")
             return order
         except Exception as e:
@@ -643,10 +641,13 @@ class TradingStrategy:
                         
                         # 发送Telegram通知
                         if self.notifier:
-                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, 
-                                                           MarketRegimeDetector.detect_market_regime(
-                                                               self.api.fetch_ohlcv(self.symbol, TIMEFRAME, limit=100)
-                                                           )[0] if self.api else 'unknown')
+                            # 获取当前市场状态
+                            try:
+                                df_regime = self.api.fetch_ohlcv(self.symbol, TIMEFRAME, limit=100)
+                                regime = MarketRegimeDetector.detect_market_regime(df_regime)[0]
+                            except:
+                                regime = 'unknown'
+                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, regime)
             
             elif signal == 'buy_small':
                 # 小仓位买入 (使用20%可用资金，用于超卖反弹)
@@ -788,44 +789,44 @@ class TradingStrategy:
             return {}
 
 # ==================== 健康检查服务 ====================
-app = Flask(__name__)
+# 注意：在GitHub Actions中不需要Flask服务，禁用以避免挂起
+# 如需本地运行或Docker部署，可以启用下面的代码
+ENABLE_FLASK = os.getenv('ENABLE_FLASK', 'False').lower() == 'true'
 
-# 全局变量 (用于健康检查，改为字典支持多交易对)
-global_strategies = {}
-global_regimes = {}
-global_positions = {}
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """
-    健康检查接口（支持多交易对）
+if ENABLE_FLASK:
+    app = Flask(__name__)
     
-    Returns:
-        JSON包含status、各交易对的状态和持仓信息
-    """
-    # 构建每个交易对的状态
-    symbols_status = {}
-    for symbol in global_regimes:
-        symbols_status[symbol] = {
-            'regime': global_regimes.get(symbol, 'unknown'),
-            'position': global_positions.get(symbol)
-        }
-    
-    return jsonify({
-        'status': 'running',
-        'symbols': symbols_status,
-        'timestamp': datetime.now().isoformat()
-    })
-
-def run_flask_app():
-    """运行Flask应用 (健康检查服务)"""
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    @app.route('/health', methods=['GET'])
+    def health_check():
+        """
+        健康检查接口（支持多交易对）
+        
+        Returns:
+            JSON包含status、各交易对的状态和持仓信息
+        """
+        # 构建每个交易对的状态
+        symbols_status = {}
+        for symbol in global_regimes:
+            symbols_status[symbol] = {
+                'regime': global_regimes.get(symbol, 'unknown'),
+                'position': global_positions.get(symbol)
+            }
+        
+        return jsonify({
+            'status': 'running',
+            'symbols': symbols_status,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    def run_flask_app():
+        """运行Flask应用 (健康检查服务)"""
+        app.run(host='0.0.0.0', port=8080, debug=False)
+else:
+    # 禁用Flask时，提供空函数
+    def run_flask_app():
+        pass
 
 # ==================== 主程序 ====================
-# 全局变量 (用于健康检查，改为字典支持多交易对)
-global_strategies = {}
-global_regimes = {}
-global_positions = {}
 
 def main():
     """主函数（支持多交易对和Telegram通知）"""
