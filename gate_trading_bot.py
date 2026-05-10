@@ -309,11 +309,11 @@ class MarketRegimeDetector:
         识别当前市场状态
         
         根据ADX、均线、布林带宽度和RSI，判断市场是：
-        - 'trending_up': 趋势向上
-        - 'trending_down': 趋势向下
-        - 'ranging': 震荡市
-        - 'high_volatility': 高波动
-        - 'oversold_rebound': 超卖反弹
+        - '趋势向上': 趋势向上
+        - '趋势向下': 趋势向下
+        - '震荡市': 震荡市
+        - '高波动': 高波动
+        - '超卖反弹': 超卖反弹
         
         Args:
             df: 包含OHLCV的DataFrame
@@ -347,21 +347,21 @@ class MarketRegimeDetector:
             # 2. 判断趋势方向
             if is_trending:
                 if ema20 > ema50 and current_price > ema20:
-                    regime = 'trending_up'
+                    regime = '趋势向上'
                 elif ema20 < ema50 and current_price < ema20:
-                    regime = 'trending_down'
+                    regime = '趋势向下'
                 else:
-                    regime = 'ranging'
+                    regime = '震荡市'
             else:
                 # 3. 震荡市判断 (ADX低 + 布林带窄)
                 if bb_width < BB_WIDTH_THRESHOLD:
-                    regime = 'ranging'
+                    regime = '震荡市'
                 else:
-                    regime = 'high_volatility'
+                    regime = '高波动'
             
             # 4. 超卖反弹判断 (RSI < 30 且不在强下跌趋势中)
-            if rsi < RSI_OVERSOLD and regime != 'trending_down':
-                regime = 'oversold_rebound'
+            if rsi < RSI_OVERSOLD and regime != '趋势向下':
+                regime = '超卖反弹'
             
             logger.info(f"市场状态: {regime}, 指标: {indicators}")
             return regime, indicators
@@ -539,9 +539,9 @@ class TradingStrategy:
         Returns:
             操作信号 ('buy', 'sell', or 'hold')
         """
-        if regime == 'trending_up' and self.current_position is None:
+        if regime == '趋势向上' and self.current_position is None:
             return 'buy'
-        elif regime == 'trending_down' and self.current_position is not None:
+        elif regime == '趋势向下' and self.current_position is not None:
             return 'sell'
         else:
             return 'hold'
@@ -587,7 +587,7 @@ class TradingStrategy:
         Returns:
             操作信号 ('buy_small', 'sell', or 'hold')
         """
-        if regime == 'oversold_rebound' and rsi < RSI_OVERSOLD:
+        if regime == '超卖反弹' and rsi < RSI_OVERSOLD:
             if self.current_position is None:
                 return 'buy_small'  # 小仓位买入
             elif rsi > RSI_OVERBOUGHT:
@@ -648,7 +648,7 @@ class TradingStrategy:
                         
                         # 发送Telegram通知
                         if self.notifier:
-                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, 'oversold_rebound')
+                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, '超卖反弹')
             
             elif signal == 'sell':
                 # 卖出全部持仓
@@ -725,19 +725,19 @@ class TradingStrategy:
             # 3. 根据市场状态选择策略
             signal = 'hold'
             
-            if regime in ['trending_up', 'trending_down']:
+            if regime in ['趋势向上', '趋势向下']:
                 # 趋势跟踪策略
                 signal = self.trend_following_strategy(regime, current_price)
             
-            elif regime == 'ranging':
+            elif regime == '震荡市':
                 # 网格交易策略
                 signal = self.grid_trading_strategy(current_price, df)
             
-            elif regime == 'oversold_rebound':
+            elif regime == '超卖反弹':
                 # 超卖反弹策略
                 signal = self.oversold_rebound_strategy(regime, indicators['rsi'])
             
-            elif regime == 'high_volatility':
+            elif regime == '高波动':
                 # 高波动市场，暂时观望
                 signal = 'hold'
                 logger.info("高波动市场，暂时观望")
