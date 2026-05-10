@@ -31,6 +31,12 @@ RSI_OVERBOUGHT = 70         # RSI超买阈值
 BB_WIDTH_THRESHOLD = 0.05   # 布林带宽度阈值 (判断震荡/趋势)
 
 # ==================== Telegram通知配置 ====================
+# 注意：GitHub Actions 使用 GitHub Secrets 中的配置，这里只是默认值
+# @GateWoBuy_bot 的 Token（从 @BotFather 获取）
 TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'True').lower() == 'true'
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '6204659239')
+
+# 验证：确保使用正确的 Bot
+# Bot Username: @GateWoBuy_bot
+# Bot Token: 8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg

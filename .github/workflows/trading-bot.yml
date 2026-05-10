@@ -27,8 +27,9 @@ jobs:
         env:
           GATEIO_API_KEY: ${{ secrets.GATEIO_API_KEY }}
           GATEIO_API_SECRET: ${{ secrets.GATEIO_API_SECRET }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Telegram 配置使用代码中的默认值（已更新为 @GateWoBuy_bot）
+          # 如需覆盖，请在 GitHub Secrets 中设置
+          TELEGRAM_ENABLED: 'True'
         run: |
           python gate_trading_bot.py
 

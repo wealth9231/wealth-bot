@@ -42,8 +42,8 @@ except ImportError:
     RSI_OVERBOUGHT = 70
     BB_WIDTH_THRESHOLD = 0.05
     TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'True').lower() == 'true'
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg")
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg")  # @GateWoBuy_bot
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")  # 请确保此 Chat ID 正确
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -74,6 +74,7 @@ class ExchangeAPI:
             'options': {
                 'defaultType': 'spot',  # 现货交易
                 'leverage': LEVERAGE,  # 设置杠杆
+                'createMarketBuyOrderRequiresPrice': False,  # Gate.io 市价买单不需要价格参数
             }
         })
         logger.info("交易所API初始化成功")
@@ -853,6 +854,8 @@ def main():
     
     # 更新全局变量
     global_strategies = strategies
+    global_regimes = {}
+    global_positions = {}
     
     # 4. 启动健康检查服务 (Flask, 后台线程)
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
