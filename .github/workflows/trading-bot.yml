@@ -25,8 +25,8 @@ jobs:
 
       - name: 运行交易机器人
         env:
-          GATE_API_KEY: ${{ secrets.GATE_API_KEY }}
-          GATE_SECRET: ${{ secrets.GATE_SECRET }}
+          GATEIO_API_KEY: ${{ secrets.GATEIO_API_KEY }}
+          GATEIO_API_SECRET: ${{ secrets.GATEIO_API_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
