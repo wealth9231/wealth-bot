@@ -858,44 +858,38 @@ def main():
     flask_thread.start()
     logger.info("健康检查服务已启动: http://0.0.0.0:8080/health")
     
-    # 5. 主循环（为每个交易对执行策略）
+    # 5. 执行策略（每次运行一次，不循环，由GitHub Actions定时触发）
     logger.info(f"开始监控交易对: {', '.join(SYMBOLS)}, 时间周期: {TIMEFRAME}")
     
-    while True:
-        try:
-            for symbol in SYMBOLS:
-                logger.info(f"\n处理交易对: {symbol}")
-                
-                # 获取K线数据
-                df = api.fetch_ohlcv(symbol, TIMEFRAME, limit=100)
-                
-                if df.empty:
-                    logger.warning(f"{symbol} 获取K线数据失败，跳过")
-                    continue
-                
-                # 执行策略
-                strategy = strategies[symbol]
-                result = strategy.run_strategy(df)
-                
-                if result:
-                    # 更新全局变量 (用于健康检查)
-                    global_regimes[symbol] = result.get('regime', 'unknown')
-                    global_positions[symbol] = result.get('position')
-                    
-                    logger.info(f"{symbol} 策略执行完成: 市场状态={result['regime']}, 信号={result['signal']}")
+    try:
+        for symbol in SYMBOLS:
+            logger.info(f"\n处理交易对: {symbol}")
             
-            # 等待15分钟
-            logger.info(f"\n等待 {TIMEFRAME} 后继续执行...")
-            time.sleep(15 * 60)  # 15分钟
+            # 获取K线数据
+            df = api.fetch_ohlcv(symbol, TIMEFRAME, limit=100)
             
-        except KeyboardInterrupt:
-            logger.info("收到停止信号，程序退出")
-            break
-        except Exception as e:
-            logger.error(f"主循环发生错误: {e}")
-            if notifier:
-                notifier.notify_error(f"主循环发生错误: {e}")
-            time.sleep(60)  # 发生错误时等待1分钟后重试
+            if df.empty:
+                logger.warning(f"{symbol} 获取K线数据失败，跳过")
+                continue
+            
+            # 执行策略
+            strategy = strategies[symbol]
+            result = strategy.run_strategy(df)
+            
+            if result:
+                # 更新全局变量 (用于健康检查)
+                global_regimes[symbol] = result.get('regime', 'unknown')
+                global_positions[symbol] = result.get('position')
+                
+                logger.info(f"{symbol} 策略执行完成: 市场状态={result['regime']}, 信号={result['signal']}")
+        
+        logger.info("本次执行完成，等待下次触发...")
+            
+    except Exception as e:
+        logger.error(f"执行发生错误: {e}")
+        if notifier:
+            notifier.notify_error(f"执行发生错误: {e}")
+        raise  # 重新抛出异常，让GitHub Actions知道失败了
 
 if __name__ == "__main__":
     main()
