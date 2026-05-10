@@ -497,26 +497,47 @@ class TelegramNotifier:
         Returns:
             是否发送成功
         """
-        # 获取持仓状态
-        position = self.api.get_position(symbol)
-        position_status = "已开仓 ✅" if self.current_position else "未开仓 ⭕"
-        profit_info = ""
-        if self.current_position and self.entry_price:
-            current_price = indicators.get('current_price', 0)
-            profit_pct = (current_price - self.entry_price) / self.entry_price * 100
-            profit_emoji = "📈" if profit_pct >= 0 else "📉"
-            profit_info = f"{profit_emoji} 盈亏: {profit_pct:+.2f}% ({'盈利' if profit_pct >= 0 else '亏损'})\n"
-        
+        # 注意：持仓状态应该在调用时通过参数传入
+        # 这里只格式化消息，不访问self.api
         message = (
             f"📊 <b>市场状态更新</b>\n"
             f"交易对: {symbol}\n"
             f"市场状态: {regime}\n"
-            f"持仓状态: {position_status}\n"
-            f"持仓数量: {self.current_position or 0:.6f} {symbol.split('/')[0]}\n"
-            f"入场价格: {self.entry_price or 'N/A'}\n"
-            f"{profit_info}"
             f"ADX: {indicators.get('adx', 'N/A')}\n"
             f"RSI: {indicators.get('rsi', 'N/A')}\n"
+            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        return self.send_message(message)
+    
+    def notify_position_status(self, symbol: str, current_position: float = None, 
+                              entry_price: float = None, current_price: float = None) -> bool:
+        """
+        发送持仓状态和盈亏通知
+        
+        Args:
+            symbol: 交易对
+            current_position: 当前持仓数量
+            entry_price: 入场价格
+            current_price: 当前价格
+            
+        Returns:
+            是否发送成功
+        """
+        position_status = "已开仓 ✅" if current_position else "未开仓 ⭕"
+        profit_info = ""
+        if current_position and entry_price and current_price:
+            profit_pct = (current_price - entry_price) / entry_price * 100
+            profit_emoji = "📈" if profit_pct >= 0 else "📉"
+            profit_info = f"{profit_emoji} 盈亏: {profit_pct:+.2f}% ({'盈利' if profit_pct >= 0 else '亏损'})\n"
+        
+        message = (
+            f"💼 <b>持仓状态</b>\n"
+            f"交易对: {symbol}\n"
+            f"持仓状态: {position_status}\n"
+            f"持仓数量: {current_position or 0:.6f} {symbol.split('/')[0]}\n"
+            f"入场价格: {entry_price or 'N/A'}\n"
+            f"当前价格: {current_price or 'N/A'}\n"
+            f"{profit_info}"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         return self.send_message(message)
@@ -730,6 +751,12 @@ class TradingStrategy:
             # 检测市场状态变化，发送Telegram通知
             if self.notifier and self.last_regime != regime:
                 self.notifier.notify_market_regime(self.symbol, regime, indicators)
+                self.notifier.notify_position_status(
+                    self.symbol, 
+                    self.current_position, 
+                    self.entry_price, 
+                    current_price
+                )
                 self.last_regime = regime
             
             # 2. 检查止损
