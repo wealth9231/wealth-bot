@@ -497,10 +497,24 @@ class TelegramNotifier:
         Returns:
             是否发送成功
         """
+        # 获取持仓状态
+        position = self.api.get_position(symbol)
+        position_status = "已开仓 ✅" if self.current_position else "未开仓 ⭕"
+        profit_info = ""
+        if self.current_position and self.entry_price:
+            current_price = indicators.get('current_price', 0)
+            profit_pct = (current_price - self.entry_price) / self.entry_price * 100
+            profit_emoji = "📈" if profit_pct >= 0 else "📉"
+            profit_info = f"{profit_emoji} 盈亏: {profit_pct:+.2f}% ({'盈利' if profit_pct >= 0 else '亏损'})\n"
+        
         message = (
             f"📊 <b>市场状态更新</b>\n"
             f"交易对: {symbol}\n"
             f"市场状态: {regime}\n"
+            f"持仓状态: {position_status}\n"
+            f"持仓数量: {self.current_position or 0:.6f} {symbol.split('/')[0]}\n"
+            f"入场价格: {self.entry_price or 'N/A'}\n"
+            f"{profit_info}"
             f"ADX: {indicators.get('adx', 'N/A')}\n"
             f"RSI: {indicators.get('rsi', 'N/A')}\n"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
