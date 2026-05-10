@@ -842,9 +842,24 @@ def main():
     
     # 2. 初始化Telegram通知器
     notifier = None
+    
+    # 调试日志：打印Telegram配置（不打印完整Token，只打印前20个字符）
+    token_preview = TELEGRAM_BOT_TOKEN[:20] + '...' if len(TELEGRAM_BOT_TOKEN) > 20 else TELEGRAM_BOT_TOKEN
+    logger.info(f"Telegram配置: ENABLED={TELEGRAM_ENABLED}, BOT_TOKEN={token_preview}, CHAT_ID={TELEGRAM_CHAT_ID}")
+    
     if TELEGRAM_ENABLED and TELEGRAM_BOT_TOKEN != "YOUR_BOT_TOKEN":
         notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED)
         logger.info("Telegram通知器初始化成功")
+        
+        # 强制发送一条测试通知，验证配置是否正确
+        logger.info("发送Telegram测试通知...")
+        test_result = notifier.send_message("🤖 测试通知 - 如果你看到这条消息，说明Telegram配置正确！")
+        if test_result:
+            logger.info("✅ Telegram测试通知发送成功！")
+        else:
+            logger.error("❌ Telegram测试通知发送失败！请检查Token和Chat ID配置")
+    else:
+        logger.warning(f"⚠️ Telegram通知器未初始化: ENABLED={TELEGRAM_ENABLED}, TOKEN_VALID={TELEGRAM_BOT_TOKEN != 'YOUR_BOT_TOKEN'}")
     
     # 3. 为每个交易对创建策略实例
     strategies = {}
