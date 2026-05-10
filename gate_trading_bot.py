@@ -26,8 +26,8 @@ try:
     from config import *
 except ImportError:
     # 如果config.py不存在，使用默认值
-    GATE_API_KEY = os.getenv('GATE_API_KEY', "bf76ef165158c1ac42512d4849326b41")
-    GATE_SECRET = os.getenv('GATE_SECRET', "a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12")
+    GATEIO_API_KEY = os.getenv('GATEIO_API_KEY', "bf76ef165158c1ac42512d4849326b41")
+    GATEIO_API_SECRET = os.getenv('GATEIO_API_SECRET', "a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12")
     SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]
     TIMEFRAME = "15m"
     LEVERAGE = 1
@@ -810,7 +810,7 @@ def main():
     logger.info("=" * 50)
     
     # 1. 初始化交易所API
-    api = ExchangeAPI(GATE_API_KEY, GATE_SECRET)
+    api = ExchangeAPI(GATEIO_API_KEY, GATEIO_API_SECRET)
     
     # 2. 初始化Telegram通知器
     notifier = None

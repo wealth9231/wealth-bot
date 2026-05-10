@@ -8,8 +8,8 @@
 import os
 
 # ==================== API密钥配置 ====================
-GATE_API_KEY = os.getenv('GATE_API_KEY', 'bf76ef165158c1ac42512d4849326b41')
-GATE_SECRET = os.getenv('GATE_SECRET', 'a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12')
+GATEIO_API_KEY = os.getenv('GATEIO_API_KEY', 'bf76ef165158c1ac42512d4849326b41')
+GATEIO_API_SECRET = os.getenv('GATEIO_API_SECRET', 'a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12')
 
 # ==================== 交易配置 ====================
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]  # 交易对列表
