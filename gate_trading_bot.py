@@ -75,15 +75,9 @@ class ExchangeAPI:
             }
         })
         
-        # 设置杠杆（针对每个交易对）
-        for symbol in SYMBOLS:
-            try:
-                self.exchange.set_leverage(LEVERAGE, symbol)
-                logger.info(f"设置 {symbol} 杠杆为 {LEVERAGE}倍")
-            except Exception as e:
-                logger.warning(f"设置杠杆失败 {symbol}: {e}")
-        
-        logger.info("交易所API初始化成功（杠杆交易模式）")
+        # 注意：不在初始化时设置杠杆，因为现货交易对不支持杠杆设置
+        # 杠杆设置将在 create_order() 中根据交易对类型动态处理
+        logger.info("交易所API初始化成功")
     
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         """获取K线数据"""
