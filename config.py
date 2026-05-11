@@ -26,7 +26,7 @@ GRID_PRICE_RANGE = 0.03     # 网格价格范围 (±3%，扩大网格范围)
 
 # ==================== 策略参数 ====================
 TREND_ADX_THRESHOLD = 20    # ADX趋势判断阈值 (降低阈值，增加趋势识别)
-RSI_OVERSOLD = 30           # RSI超卖阈值 (提高门槛，减少假信号)
+RSI_OVERSOLD = 35           # RSI超卖阈值 (适中，增加开仓机会)
 RSI_OVERBOUGHT = 65         # RSI超买阈值 (放宽超买条件)
 BB_WIDTH_THRESHOLD = 0.03   # 布林带宽度阈值 (降低阈值，更多震荡市交易机会)
 
