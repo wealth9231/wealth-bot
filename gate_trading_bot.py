@@ -107,13 +107,18 @@ class ExchangeAPI:
     
     def create_order(self, symbol: str, side: str, amount: float, 
                      order_type: str = 'market', price: Optional[float] = None) -> Dict:
-        """创建订单（支持杠杆交易）"""
+        """创建订单（自动区分现货/杠杆）"""
         try:
-            # 对于杠杆交易，需要指定保证金模式
-            params = {
-                'type': 'margin',  # 保证金交易
-                'leverage': LEVERAGE,
-            }
+            # 根据交易对决定是否使用杠杆
+            # 格式：BTC/USDT → 现货；BTC/USDT:USDT → 杠杆
+            is_margin = ':' in symbol
+            
+            params = {}
+            if is_margin:
+                params = {
+                    'type': 'margin',
+                    'leverage': LEVERAGE,
+                }
             
             if order_type == 'market':
                 order = self.exchange.create_market_order(symbol, side, amount, params)
