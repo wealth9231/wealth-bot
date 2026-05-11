@@ -52,7 +52,7 @@ class SimpleStrategy:
     
     def run(self, df: pd.DataFrame) -> str:
         """
-        运行策略（方案A - 反转策略/抄底逃顶）
+        运行策略（只用方案A - 反转策略/抄底逃顶）
         
         核心逻辑：
         - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
@@ -63,7 +63,7 @@ class SimpleStrategy:
             'buy', 'sell', 'hold', 'sell_stop_loss', 'sell_take_profit'
         """
         try:
-            # 1. 识别市场状态（用于日志）
+            # 1. 识别市场状态
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
             current_price = df['close'].iloc[-1]
             rsi = indicators.get('rsi', 50)
@@ -92,24 +92,24 @@ class SimpleStrategy:
                     logger.info(f"📉 追踪止损触发: 回撤={drawdown*100:.2f}%")
                     return 'sell_trailing_stop'
             
-            # 3. 【方案A】反转策略（抄底逃顶）
+            # 3. 【只用方案A】反转策略（抄底逃顶）
             signal = 'hold'
             
             # 计算布林带位置
             upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
-            bb_position = (current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])  # 0=下轨, 1=上轨
+            bb_position = (current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])
             
             # === 买入信号：抄底 ===
             if self.position is None:
                 # 条件1：RSI 超卖 (< 35)
                 # 条件2：价格接近布林带下轨 (bb_position < 0.3)
                 if rsi < RSI_OVERSOLD and bb_position < 0.3:
-                    logger.info(f"🟢 反转策略买入: RSI={rsi:.1f} < {RSI_OVERSOLD}, 布林带位置={bb_position:.2f} < 0.3")
+                    logger.info(f"🟢 [方案A] 反转策略买入: RSI={rsi:.1f} < {RSI_OVERSOLD}, 布林带位置={bb_position:.2f} < 0.3")
                     signal = 'buy'
                 
                 # 特殊情况：RSI 极度超卖 (< 25) + Stoch RSI 极度超卖 (< 15)
                 elif rsi < 25 and stoch_k < 15:
-                    logger.info(f"🟢 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                    logger.info(f"🟢 [方案A] 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
                     signal = 'buy'
                 
                 else:
@@ -121,12 +121,12 @@ class SimpleStrategy:
                 # 条件1：RSI 超买 (> 65)
                 # 条件2：价格接近布林带上轨 (bb_position > 0.7)
                 if rsi > RSI_OVERBOUGHT and bb_position > 0.7:
-                    logger.info(f"🔴 反转策略卖出: RSI={rsi:.1f} > {RSI_OVERBOUGHT}, 布林带位置={bb_position:.2f} > 0.7")
+                    logger.info(f"🔴 [方案A] 反转策略卖出: RSI={rsi:.1f} > {RSI_OVERBOUGHT}, 布林带位置={bb_position:.2f} > 0.7")
                     signal = 'sell'
                 
                 # 特殊情况：RSI 极度超买 (> 75) + Stoch RSI 极度超买 (> 85)
                 elif rsi > 75 and stoch_k > 85:
-                    logger.info(f"🔴 反转策略卖出(极度超买): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                    logger.info(f"🔴 [方案A] 反转策略卖出(极度超买): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
                     signal = 'sell'
                 
                 else:
@@ -264,12 +264,12 @@ class SimpleBacktest:
 
 # ==================== 主程序 ====================
 def main():
-    """运行回测"""
+    """运行回测（混合策略 - 方案A+B）"""
     symbol = "BTC/USDT"
-    days = 7
+    days = 7  # 7天回测，快速验证
     
     logger.info("=" * 60)
-    logger.info(f"开始回测: {symbol}, 过去{days}天")
+    logger.info(f"开始回测: {symbol}, 过去{days}天 (混合策略 - 方案A+B)")
     logger.info("=" * 60)
     
     # 1. 获取历史数据

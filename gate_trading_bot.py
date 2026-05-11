@@ -606,6 +606,57 @@ class TradingStrategy:
             logger.error(f"反转策略计算失败: {e}")
             return 'hold'
     
+    def trend_following_pullback_strategy(self, regime: str, indicators: Dict, df: pd.DataFrame) -> str:
+        """
+        方案B：趋势跟踪 + 回调买入（优化前版本）
+        
+        核心逻辑：
+        - 买入信号：ADX > 25 (趋势确认) + RSI < 50 (回调) + MACD > Signal (动量回归)
+        - 卖出信号：RSI > 70 (超买) 或 追踪止损触发
+        - 适用场景：趋势市（BTC 30%时间在这里）
+        
+        返回：'buy', 'sell', 'hold'
+        """
+        adx = indicators.get('adx', 0)
+        rsi = indicators.get('rsi', 50)
+        macd = indicators.get('macd', 0)
+        macd_signal = indicators.get('macd_signal', 0)
+        current_price = df['close'].iloc[-1]
+        
+        try:
+            # === 买入信号：趋势确认 + 回调 ===
+            if self.current_position is None:
+                # 条件1：ADX > 25 (趋势确认)
+                # 条件2：RSI < 50 (回调，不是追涨)
+                # 条件3：MACD > Signal (动量回归)
+                if adx > TREND_ADX_THRESHOLD and rsi < 50 and macd > macd_signal:
+                    logger.info(f"🟢 趋势策略买入(回调): ADX={adx:.1f} > {TREND_ADX_THRESHOLD}, RSI={rsi:.1f} < 50, MACD={macd:.2f} > Signal={macd_signal:.2f}")
+                    return 'buy'
+                
+                # 特殊情况：ADX > 30 (强趋势) + RSI < 40 (深度回调)
+                elif adx > 30 and rsi < 40:
+                    logger.info(f"🟢 趋势策略买入(深度回调): ADX={adx:.1f} > 30, RSI={rsi:.1f} < 40")
+                    return 'buy'
+            
+            # === 卖出信号：超买 或 趋势结束 ===
+            elif self.current_position is not None:
+                # 条件1：RSI > 70 (超买)
+                if rsi > 70:
+                    logger.info(f"🔴 趋势策略卖出(超买): RSI={rsi:.1f} > 70")
+                    return 'sell'
+                
+                # 条件2：ADX < 20 (趋势结束) + RSI > 50 (动能减弱)
+                if adx < 20 and rsi > 50:
+                    logger.info(f"🔴 趋势策略卖出(趋势结束): ADX={adx:.1f} < 20, RSI={rsi:.1f} > 50")
+                    return 'sell'
+            
+            # 持有
+            return 'hold'
+            
+        except Exception as e:
+            logger.error(f"趋势跟踪策略计算失败: {e}")
+            return 'hold'
+    
     def check_take_profit(self, current_price: float) -> bool:
         """
         检查止盈条件（新增）
@@ -773,7 +824,7 @@ class TradingStrategy:
     
     def run_strategy(self, df: pd.DataFrame) -> Dict:
         """
-        运行主策略逻辑（方案A - 反转策略）
+        运行主策略逻辑（只用方案A - 反转策略/抄底逃顶）
         
         核心逻辑：
         - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
@@ -806,17 +857,19 @@ class TradingStrategy:
                 self.execute_signal('sell', current_price)
                 return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
             
-            # 4. 【方案A】始终使用反转策略（抄底逃顶）
+            # 4. 【只用方案A】反转策略（抄底逃顶）
             signal = self.reversal_strategy(regime, indicators, df)
+            strategy_name = '方案A(反转策略)'
             
             # 5. 执行交易信号
             if signal != 'hold':
                 self.execute_signal(signal, current_price)
+                logger.info(f"✅ {strategy_name} → 执行信号: {signal}")
             else:
                 # 详细日志记录为什么没有交易
                 rsi = indicators.get('rsi', 50)
                 stoch_k = indicators.get('stoch_k', 50)
-                reason = f"🟡 无交易信号 (反转策略)\n"
+                reason = f"🟡 无交易信号 ({strategy_name})\n"
                 reason += f"  市场状态: {regime}\n"
                 reason += f"  持仓状态: {'已持仓' if self.current_position else '未持仓'}\n"
                 reason += f"  指标: RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}\n"
@@ -827,6 +880,7 @@ class TradingStrategy:
             return {
                 'regime': regime,
                 'signal': signal,
+                'strategy': strategy_name,
                 'indicators': indicators,
                 'position': self.current_position,
                 'entry_price': self.entry_price
