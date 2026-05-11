@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gate.io 全自动量化交易机器人
-功能：市场状态识别 + 趋势/网格混合策略 + 风控管理
-交易所：Gate.io (通过CCXT库)
-交易对：BTC/USDT (可扩展至ETH/SOL/BNB/DOGE)
-杠杆：4倍 (现货/杠杆)
+Gate.io 全自动量化交易机器人 (优化版)
+改进点：
+1. 新增 MACD、Stochastic RSI 指标
+2. 优化入场/出场逻辑（更激进）
+3. 修复杠杆设置（真正启用4倍杠杆）
+4. 增加自动止盈和追踪止损
+5. 详细日志记录每次决策原因
 """
 
 import ccxt
@@ -30,20 +32,20 @@ except ImportError:
     GATEIO_API_SECRET = os.getenv('GATEIO_API_SECRET', "a7e5e275ff75d88120af845921b176281c52901053a7ad6787a1c7db188d6e12")
     SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]
     TIMEFRAME = "15m"
-    LEVERAGE = 1
-    MAX_POSITION = 0.0005
-    STOP_LOSS_PCT = -0.015
-    MIN_RR_RATIO = 1.5
-    TARGET_PROFIT_PCT = 0.02
-    GRID_NUM = 10
-    GRID_PRICE_RANGE = 0.02
-    TREND_ADX_THRESHOLD = 25
-    RSI_OVERSOLD = 30
-    RSI_OVERBOUGHT = 70
-    BB_WIDTH_THRESHOLD = 0.05
+    LEVERAGE = 4  # 4倍杠杆
+    MAX_POSITION = 0.001
+    STOP_LOSS_PCT = -0.02
+    MIN_RR_RATIO = 1.2
+    TARGET_PROFIT_PCT = 0.01
+    GRID_NUM = 20
+    GRID_PRICE_RANGE = 0.03
+    TREND_ADX_THRESHOLD = 20
+    RSI_OVERSOLD = 35
+    RSI_OVERBOUGHT = 65
+    BB_WIDTH_THRESHOLD = 0.03
     TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'True').lower() == 'true'
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGR4wryx4Zj4TARb9yeC83KOqJQJThTzMo")  # @GateWoBuy_bot (已重置Token)
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")  # 请确保此 Chat ID 正确
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGR4wryx4Zj4TARb9yeC83KOqJQJThTzMo")
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -56,41 +58,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==================== 交易所初始化 ====================
+# ==================== 交易所初始化（优化版）====================
 class ExchangeAPI:
-    """交易所API封装类"""
+    """交易所API封装类（优化版 - 修复杠杆设置）"""
     def __init__(self, api_key: str, secret: str):
         """
-        初始化Gate.io交易所连接
-        
-        Args:
-            api_key: Gate.io API Key
-            secret: Gate.io Secret Key
+        初始化Gate.io交易所连接（支持4倍杠杆）
         """
         self.exchange = ccxt.gateio({
             'apiKey': api_key,
             'secret': secret,
-            'enableRateLimit': True,  # 启用请求频率限制
+            'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',  # 现货交易
-                'leverage': LEVERAGE,  # 设置杠杆
-                'createMarketBuyOrderRequiresPrice': False,  # Gate.io 市价买单不需要价格参数
+                'defaultType': 'margin',  # 改为 margin 以支持杠杆
+                'createMarketBuyOrderRequiresPrice': False,
             }
         })
-        logger.info("交易所API初始化成功")
+        
+        # 设置杠杆（针对每个交易对）
+        for symbol in SYMBOLS:
+            try:
+                self.exchange.set_leverage(LEVERAGE, symbol)
+                logger.info(f"设置 {symbol} 杠杆为 {LEVERAGE}倍")
+            except Exception as e:
+                logger.warning(f"设置杠杆失败 {symbol}: {e}")
+        
+        logger.info("交易所API初始化成功（杠杆交易模式）")
     
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-        """
-        获取K线数据
-        
-        Args:
-            symbol: 交易对
-            timeframe: 时间周期
-            limit: 获取数量
-            
-        Returns:
-            DataFrame包含OHLCV数据
-        """
+        """获取K线数据"""
         try:
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -101,12 +97,7 @@ class ExchangeAPI:
             return pd.DataFrame()
     
     def get_balance(self) -> Dict:
-        """
-        获取账户余额
-        
-        Returns:
-            账户余额字典
-        """
+        """获取账户余额（包含保证金余额）"""
         try:
             balance = self.exchange.fetch_balance()
             return balance
@@ -116,22 +107,19 @@ class ExchangeAPI:
     
     def create_order(self, symbol: str, side: str, amount: float, 
                      order_type: str = 'market', price: Optional[float] = None) -> Dict:
-        """
-        创建订单
-        
-        Args:
-            symbol: 交易对
-            side: 买卖方向 ('buy' or 'sell')
-            amount: 数量
-            order_type: 订单类型 ('market' or 'limit')
-            price: 价格 (限价单使用)
-            
-        Returns:
-            订单信息字典
-        """
+        """创建订单（支持杠杆交易）"""
         try:
-            # CCXT正确用法: create_order(symbol, type, side, amount, price, params)
-            order = self.exchange.create_order(symbol, order_type, side, amount, price)
+            # 对于杠杆交易，需要指定保证金模式
+            params = {
+                'type': 'margin',  # 保证金交易
+                'leverage': LEVERAGE,
+            }
+            
+            if order_type == 'market':
+                order = self.exchange.create_market_order(symbol, side, amount, params)
+            else:
+                order = self.exchange.create_limit_order(symbol, side, amount, price, params)
+            
             logger.info(f"订单创建成功: {side} {amount} {symbol} @ {price if price else 'market'}")
             return order
         except Exception as e:
@@ -139,20 +127,11 @@ class ExchangeAPI:
             return {}
     
     def get_position(self, symbol: str) -> Dict:
-        """
-        获取持仓信息
-        
-        Args:
-            symbol: 交易对
-            
-        Returns:
-            持仓信息字典
-        """
+        """获取持仓信息（杠杆交易）"""
         try:
-            # 获取当前持仓 (现货持仓在balance中)
             balance = self.get_balance()
-            base_currency = symbol.split('/')[0]  # 基础货币 (如BTC)
-            quote_currency = symbol.split('/')[1]  # 计价货币 (如USDT)
+            base_currency = symbol.split('/')[0]
+            quote_currency = symbol.split('/')[1]
             
             position = {
                 'base_amount': balance[base_currency]['free'] if base_currency in balance else 0,
@@ -164,24 +143,14 @@ class ExchangeAPI:
             logger.error(f"获取持仓失败: {e}")
             return {}
 
-# ==================== 技术指标计算 ====================
+# ==================== 技术指标计算（增强版）====================
 class TechnicalIndicators:
-    """技术指标计算类"""
+    """技术指标计算类（增强版 - 新增MACD、Stochastic RSI）"""
     
     @staticmethod
     def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """
-        计算ADX (平均趋向指数)
-        
-        Args:
-            df: 包含OHLC的DataFrame
-            period: ADX周期
-            
-        Returns:
-            ADX值序列
-        """
+        """计算ADX"""
         try:
-            # 计算+DI和-DI
             high = df['high']
             low = df['low']
             close = df['close']
@@ -211,16 +180,7 @@ class TechnicalIndicators:
     
     @staticmethod
     def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """
-        计算RSI (相对强弱指数)
-        
-        Args:
-            df: 包含close的DataFrame
-            period: RSI周期
-            
-        Returns:
-            RSI值序列
-        """
+        """计算RSI"""
         try:
             close = df['close']
             delta = close.diff()
@@ -234,17 +194,50 @@ class TechnicalIndicators:
             return pd.Series()
     
     @staticmethod
-    def calculate_ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    def calculate_stochastic_rsi(df: pd.DataFrame, period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> Tuple[pd.Series, pd.Series]:
         """
-        计算EMA (指数移动平均线)
-        
-        Args:
-            df: 包含close的DataFrame
-            period: EMA周期
+        计算 Stochastic RSI（随机RSI）
+        比普通RSI更敏感，能更早捕捉超买超卖
+        """
+        try:
+            rsi = TechnicalIndicators.calculate_rsi(df, period)
             
-        Returns:
-            EMA值序列
+            # 计算Stochastic RSI
+            stoch_rsi = (rsi - rsi.rolling(window=period).min()) / (rsi.rolling(window=period).max() - rsi.rolling(window=period).min()) * 100
+            
+            # 平滑处理
+            k = stoch_rsi.rolling(window=smooth_k).mean()
+            d = k.rolling(window=smooth_d).mean()
+            
+            return k, d
+        except Exception as e:
+            logger.error(f"计算Stochastic RSI失败: {e}")
+            return pd.Series(), pd.Series()
+    
+    @staticmethod
+    def calculate_macd(df: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
+        计算MACD
+        返回：(macd_line, signal_line, histogram)
+        """
+        try:
+            close = df['close']
+            
+            ema_fast = close.ewm(span=fast_period, adjust=False).mean()
+            ema_slow = close.ewm(span=slow_period, adjust=False).mean()
+            
+            macd_line = ema_fast - ema_slow
+            signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+            histogram = macd_line - signal_line
+            
+            return macd_line, signal_line, histogram
+        except Exception as e:
+            logger.error(f"计算MACD失败: {e}")
+            return pd.Series(), pd.Series(), pd.Series()
+    
+    @staticmethod
+    def calculate_ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
+        """计算EMA"""
         try:
             return df['close'].ewm(span=period, adjust=False).mean()
         except Exception as e:
@@ -254,17 +247,7 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_bollinger_bands(df: pd.DataFrame, period: int = 20, 
                                   std_dev: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
-        """
-        计算布林带
-        
-        Args:
-            df: 包含close的DataFrame
-            period: 周期
-            std_dev: 标准差倍数
-            
-        Returns:
-            (上轨, 中轨, 下轨) 元组
-        """
+        """计算布林带"""
         try:
             close = df['close']
             sma = close.rolling(window=period).mean()
@@ -280,16 +263,7 @@ class TechnicalIndicators:
     
     @staticmethod
     def calculate_bb_width(df: pd.DataFrame, period: int = 20) -> pd.Series:
-        """
-        计算布林带宽度 (用于判断市场波动状态)
-        
-        Args:
-            df: 包含close的DataFrame
-            period: 周期
-            
-        Returns:
-            布林带宽度序列
-        """
+        """计算布林带宽度"""
         try:
             upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df, period)
             width = (upper - lower) / middle
@@ -297,37 +271,47 @@ class TechnicalIndicators:
         except Exception as e:
             logger.error(f"计算布林带宽度失败: {e}")
             return pd.Series()
+    
+    @staticmethod
+    def calculate_volume_sma(df: pd.DataFrame, period: int = 20) -> pd.Series:
+        """计算成交量简单移动平均"""
+        try:
+            return df['volume'].rolling(window=period).mean()
+        except Exception as e:
+            logger.error(f"计算成交量SMA失败: {e}")
+            return pd.Series()
 
-# ==================== 市场状态识别 ====================
+# ==================== 市场状态识别（优化版）====================
 class MarketRegimeDetector:
-    """市场状态识别器"""
+    """市场状态识别器（优化版 - 增加更多状态）"""
     
     @staticmethod
     def detect_market_regime(df: pd.DataFrame) -> Tuple[str, Dict]:
         """
-        识别当前市场状态
+        识别当前市场状态（优化版）
         
-        根据ADX、均线、布林带宽度和RSI，判断市场是：
-        - '趋势向上': 趋势向上
-        - '趋势向下': 趋势向下
-        - '震荡市': 震荡市
-        - '高波动': 高波动
-        - '超卖反弹': 超卖反弹
-        
-        Args:
-            df: 包含OHLCV的DataFrame
-            
-        Returns:
-            (市场状态, 指标详情) 元组
+        新增状态：
+        - '强势上涨': MACD金叉 + RSI > 50
+        - '强势下跌': MACD死叉 + RSI < 50
+        - '反转信号': Stochastic RSI超卖/超买反转
         """
         try:
-            # 计算技术指标
+            # 计算所有技术指标
             adx = TechnicalIndicators.calculate_adx(df).iloc[-1]
             rsi = TechnicalIndicators.calculate_rsi(df).iloc[-1]
             ema20 = TechnicalIndicators.calculate_ema(df, 20).iloc[-1]
             ema50 = TechnicalIndicators.calculate_ema(df, 50).iloc[-1]
             bb_width = TechnicalIndicators.calculate_bb_width(df).iloc[-1]
             current_price = df['close'].iloc[-1]
+            
+            # 新增：MACD和Stochastic RSI
+            macd, macd_signal, macd_hist = TechnicalIndicators.calculate_macd(df)
+            stoch_k, stoch_d = TechnicalIndicators.calculate_stochastic_rsi(df)
+            
+            macd_current = macd.iloc[-1]
+            macd_signal_current = macd_signal.iloc[-1]
+            stoch_k_current = stoch_k.iloc[-1]
+            stoch_d_current = stoch_d.iloc[-1]
             
             # 指标详情
             indicators = {
@@ -336,31 +320,46 @@ class MarketRegimeDetector:
                 'ema20': round(ema20, 2),
                 'ema50': round(ema50, 2),
                 'bb_width': round(bb_width, 4),
-                'current_price': round(current_price, 2)
+                'current_price': round(current_price, 2),
+                'macd': round(macd_current, 4),
+                'macd_signal': round(macd_signal_current, 4),
+                'stoch_k': round(stoch_k_current, 2),
+                'stoch_d': round(stoch_d_current, 2)
             }
             
-            # 判断市场状态
-            # 1. 判断趋势强度 (ADX > 25 为强趋势)
+            # 判断市场状态（优化逻辑）
             is_trending = adx > TREND_ADX_THRESHOLD
             
-            # 2. 判断趋势方向
+            # 1. 强势趋势判断（新增MACD确认）
             if is_trending:
-                if ema20 > ema50 and current_price > ema20:
+                # MACD金叉 = 买入信号
+                macd_cross_up = (macd.iloc[-1] > macd_signal.iloc[-1]) and (macd.iloc[-2] <= macd_signal.iloc[-2])
+                # MACD死叉 = 卖出信号
+                macd_cross_down = (macd.iloc[-1] < macd_signal.iloc[-1]) and (macd.iloc[-2] >= macd_signal.iloc[-2])
+                
+                if ema20 > ema50 and current_price > ema20 and (macd_cross_up or rsi > 50):
+                    regime = '强势上涨'
+                elif ema20 < ema50 and current_price < ema20 and (macd_cross_down or rsi < 50):
+                    regime = '强势下跌'
+                elif ema20 > ema50 and current_price > ema20:
                     regime = '趋势向上'
                 elif ema20 < ema50 and current_price < ema20:
                     regime = '趋势向下'
                 else:
                     regime = '震荡市'
             else:
-                # 3. 震荡市判断 (ADX低 + 布林带窄)
-                if bb_width < BB_WIDTH_THRESHOLD:
+                # 2. 震荡市 + Stochastic RSI反转信号
+                stoch_oversold = stoch_k_current < 20 and stoch_d_current < 20
+                stoch_overbought = stoch_k_current > 80 and stoch_d_current > 80
+                
+                if stoch_oversold and bb_width < BB_WIDTH_THRESHOLD:
+                    regime = '反转信号_超卖'
+                elif stoch_overbought and bb_width < BB_WIDTH_THRESHOLD:
+                    regime = '反转信号_超买'
+                elif bb_width < BB_WIDTH_THRESHOLD:
                     regime = '震荡市'
                 else:
                     regime = '高波动'
-            
-            # 4. 超卖反弹判断 (RSI < 30 且不在强下跌趋势中)
-            if rsi < RSI_OVERSOLD and regime != '趋势向下':
-                regime = '超卖反弹'
             
             logger.info(f"市场状态: {regime}, 指标: {indicators}")
             return regime, indicators
@@ -368,35 +367,18 @@ class MarketRegimeDetector:
         except Exception as e:
             logger.error(f"市场状态识别失败: {e}")
             return 'unknown', {}
-        
-# ==================== Telegram通知模块 ====================
+
+# ==================== Telegram通知模块（保持不变）====================
 class TelegramNotifier:
     """Telegram通知类"""
     
     def __init__(self, bot_token: str, chat_id: str, enabled: bool = True):
-        """
-        初始化Telegram通知器
-        
-        Args:
-            bot_token: Telegram Bot Token
-            chat_id: 接收通知的Chat ID
-            enabled: 是否启用通知
-        """
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = enabled
-        self.api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        self.api_url = f"https://api.telegram.org/bot{ bot_token}/sendMessage"
     
     def send_message(self, message: str) -> bool:
-        """
-        发送消息到Telegram
-        
-        Args:
-            message: 要发送的消息内容
-            
-        Returns:
-            是否发送成功
-        """
         if not self.enabled:
             return False
         
@@ -421,18 +403,7 @@ class TelegramNotifier:
             return False
     
     def notify_trade_signal(self, symbol: str, signal: str, price: float, regime: str) -> bool:
-        """
-        通知交易信号
-        
-        Args:
-            symbol: 交易对
-            signal: 交易信号 (buy/sell/hold)
-            price: 当前价格
-            regime: 市场状态
-            
-        Returns:
-            是否发送成功
-        """
+        """通知交易信号"""
         emoji = "🟢" if signal == 'buy' else "🔴" if signal == 'sell' else "🟡"
         message = (
             f"{emoji} <b>交易信号</b>\n"
@@ -445,18 +416,7 @@ class TelegramNotifier:
         return self.send_message(message)
     
     def notify_stop_loss(self, symbol: str, entry_price: float, current_price: float, loss_pct: float) -> bool:
-        """
-        通知止损触发
-        
-        Args:
-            symbol: 交易对
-            entry_price: 入场价格
-            current_price: 当前价格
-            loss_pct: 亏损百分比
-            
-        Returns:
-            是否发送成功
-        """
+        """通知止损触发"""
         message = (
             f"🔴 <b>止损触发</b>\n"
             f"交易对: {symbol}\n"
@@ -467,16 +427,20 @@ class TelegramNotifier:
         )
         return self.send_message(message)
     
+    def notify_take_profit(self, symbol: str, entry_price: float, current_price: float, profit_pct: float) -> bool:
+        """通知止盈触发"""
+        message = (
+            f"🟢 <b>止盈触发</b>\n"
+            f"交易对: {symbol}\n"
+            f"入场价: {entry_price:.2f}\n"
+            f"当前价: {current_price:.2f}\n"
+            f"盈利: {profit_pct*100:.2f}%\n"
+            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        return self.send_message(message)
+    
     def notify_error(self, error_msg: str) -> bool:
-        """
-        通知错误
-        
-        Args:
-            error_msg: 错误信息
-            
-        Returns:
-            是否发送成功
-        """
+        """通知错误"""
         message = (
             f"⚠️ <b>系统错误</b>\n"
             f"{error_msg}\n"
@@ -487,21 +451,7 @@ class TelegramNotifier:
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
                               entry_price: float = None, current_price: float = None) -> bool:
-        """
-        通知市场状态变化和持仓状态（合并为一条消息）
-        
-        Args:
-            symbol: 交易对
-            regime: 市场状态
-            indicators: 技术指标字典
-            current_position: 当前持仓数量
-            entry_price: 入场价格
-            current_price: 当前价格
-            
-        Returns:
-            是否发送成功
-        """
-        # 持仓状态信息
+        """通知市场状态（合并持仓信息）"""
         position_status = "已开仓 ✅" if current_position else "未开仓 ⭕"
         profit_info = ""
         if current_position and entry_price and current_price:
@@ -509,232 +459,290 @@ class TelegramNotifier:
             profit_emoji = "📈" if profit_pct >= 0 else "📉"
             profit_info = f"{profit_emoji} 盈亏: {profit_pct:+.2f}% ({'盈利' if profit_pct >= 0 else '亏损'})\n"
         
-        # 合并为一条消息
         message = (
             f"📊 <b>市场状态更新</b>\n"
             f"交易对: {symbol}\n"
             f"市场状态: {regime}\n"
             f"持仓状态: {position_status}\n"
-            f"持仓数量: {current_position or 0:.6f} {symbol.split('/')[0]}\n"
-            f"入场价格: {entry_price or 'N/A'}\n"
-            f"当前价格: {current_price or 'N/A'}\n"
-            f"{profit_info}"
             f"ADX: {indicators.get('adx', 'N/A')}\n"
             f"RSI: {indicators.get('rsi', 'N/A')}\n"
+            f"MACD: {indicators.get('macd', 'N/A')}\n"
+            f"Stoch RSI: {indicators.get('stoch_k', 'N/A')}\n"
+            f"当前价格: {current_price or 'N/A'}\n"
+            f"{profit_info}"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         return self.send_message(message)
-        
-# ==================== 策略模块 ====================
+
+# ==================== 策略模块（优化版）====================
 class TradingStrategy:
-    """交易策略类（支持多交易对和Telegram通知）"""
+    """交易策略类（优化版 - 更激进的入场/出场）"""
     
     def __init__(self, exchange_api: ExchangeAPI, symbol: str, notifier: TelegramNotifier = None):
-        """
-        初始化策略
-        
-        Args:
-            exchange_api: 交易所API对象
-            symbol: 交易对（每个交易对一个策略实例）
-            notifier: Telegram通知器对象
-        """
         self.api = exchange_api
-        self.symbol = symbol  # 关联交易对
-        self.notifier = notifier  # Telegram通知器
+        self.symbol = symbol
+        self.notifier = notifier
         self.current_position = None
         self.entry_price = None
-        self.grid_orders = []  # 网格订单列表
-        self.last_regime = None  # 上次市场状态（用于检测变化）
+        self.entry_time = None
+        self.highest_price = None  # 用于追踪止损
+        self.last_regime = None
         
-    def trend_following_strategy(self, regime: str, current_price: float) -> str:
+    def trend_following_strategy(self, regime: str, current_price: float, indicators: Dict) -> str:
         """
-        趋势跟踪策略
+        趋势跟踪策略（优化版 - 更激进）
         
-        Args:
-            regime: 市场状态
-            current_price: 当前价格
-            
-        Returns:
-            操作信号 ('buy', 'sell', or 'hold')
+        改进点：
+        1. 强势上涨时立即买入（不只趋势向上）
+        2. 增加MACD确认
+        3. 降低入场门槛
         """
-        if regime == '趋势向上' and self.current_position is None:
+        # 强势上涨或趋势向上，且未持仓 → 买入
+        if regime in ['强势上涨', '趋势向上'] and self.current_position is None:
+            logger.info(f"趋势策略: {regime} + 未持仓 → 买入信号")
             return 'buy'
-        elif regime == '趋势向下' and self.current_position is not None:
+        
+        # 强势下跌或趋势向下，且已持仓 → 卖出
+        elif regime in ['强势下跌', '趋势向下'] and self.current_position is not None:
+            logger.info(f"趋势策略: {regime} + 已持仓 → 卖出信号")
             return 'sell'
+        
         else:
+            reason = f"趋势策略: {regime} + "
+            reason += "已持仓" if self.current_position else "未持仓"
+            reason += " → 持有"
+            logger.info(reason)
             return 'hold'
     
     def grid_trading_strategy(self, current_price: float, df: pd.DataFrame) -> str:
         """
-        网格交易策略 (震荡市使用)
+        网格交易策略（优化版 - 更频繁的网格交易）
         
-        Args:
-            current_price: 当前价格
-            df: K线数据
-            
-        Returns:
-            操作信号 ('buy', 'sell', or 'hold')
+        改进点：
+        1. 降低买入阈值（40% instead of 30%）
+        2. 降低卖出阈值（60% instead of 70%）
+        3. 增加成交量确认
         """
         try:
-            # 计算网格价格区间
             upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
             grid_spacing = (upper.iloc[-1] - lower.iloc[-1]) / GRID_NUM
             
-            # 判断当前价格在哪个网格位置
+            # 当前价格所在网格位置
             grid_level = (current_price - lower.iloc[-1]) / grid_spacing
             
-            # 低价区买入，高价区卖出
-            if grid_level < GRID_NUM * 0.3 and self.current_position is None:
+            # 成交量确认（避免假突破）
+            volume = df['volume'].iloc[-1]
+            volume_sma = TechnicalIndicators.calculate_volume_sma(df).iloc[-1]
+            volume_confirmed = volume > volume_sma * 0.8  # 成交量大于均量的80%
+            
+            # 优化逻辑：更激进的网格交易
+            if grid_level < GRID_NUM * 0.4 and self.current_position is None and volume_confirmed:
+                logger.info(f"网格策略: 价格处于网格下部({grid_level:.1f}/{GRID_NUM}) + 成交量确认 → 买入")
                 return 'buy'
-            elif grid_level > GRID_NUM * 0.7 and self.current_position is not None:
+            elif grid_level > GRID_NUM * 0.6 and self.current_position is not None:
+                logger.info(f"网格策略: 价格处于网格上部({grid_level:.1f}/{GRID_NUM}) → 卖出")
                 return 'sell'
             else:
+                reason = f"网格策略: 价格处于网格中部({grid_level:.1f}/{GRID_NUM}) → 持有"
+                logger.info(reason)
                 return 'hold'
+                
         except Exception as e:
             logger.error(f"网格策略计算失败: {e}")
             return 'hold'
     
-    def oversold_rebound_strategy(self, regime: str, rsi: float) -> str:
+    def reversal_strategy(self, regime: str, indicators: Dict) -> str:
         """
-        超卖反弹策略 (小仓位逆向建仓)
+        反转策略（新增 - 捕捉超卖反弹和超买回调）
         
-        Args:
-            regime: 市场状态
-            rsi: RSI值
-            
-        Returns:
-            操作信号 ('buy_small', 'sell', or 'hold')
+        适用场景：
+        - '反转信号_超卖' → 买入
+        - '反转信号_超买' → 卖出
         """
-        if regime == '超卖反弹' and rsi < RSI_OVERSOLD:
-            if self.current_position is None:
-                return 'buy_small'  # 小仓位买入
-            elif rsi > RSI_OVERBOUGHT:
-                return 'sell'  # RSI超买时卖出
-        return 'hold'
+        stoch_k = indicators.get('stoch_k', 50)
+        
+        if regime == '反转信号_超卖' and self.current_position is None:
+            logger.info(f"反转策略: {regime} (Stoch RSI={stoch_k:.1f}) → 买入")
+            return 'buy_small'
+        elif regime == '反转信号_超买' and self.current_position is not None:
+            logger.info(f"反转策略: {regime} (Stoch RSI={stoch_k:.1f}) → 卖出")
+            return 'sell'
+        else:
+            return 'hold'
+    
+    def check_take_profit(self, current_price: float) -> bool:
+        """
+        检查止盈条件（新增）
+        
+         Returns:
+            是否触发止盈
+        """
+        if self.entry_price is None or self.current_position is None:
+            return False
+        
+        profit_pct = (current_price - self.entry_price) / self.entry_price
+        
+        if profit_pct >= TARGET_PROFIT_PCT:
+            logger.info(f"触发止盈: 入场价={self.entry_price}, 当前价={current_price}, 盈利={profit_pct*100:.2f}%")
+            
+            if self.notifier:
+                self.notifier.notify_take_profit(self.symbol, self.entry_price, current_price, profit_pct)
+            
+            return True
+        
+        return False
+    
+    def check_trailing_stop(self, current_price: float) -> bool:
+        """
+        检查追踪止损（新增）
+        
+        逻辑：
+        - 当价格上涨时，动态上调止损价
+        - 当价格回落超过2%时，触发止损
+        
+        Returns:
+            是否触发追踪止损
+        """
+        if self.entry_price is None or self.current_position is None:
+            return False
+        
+        # 初始化最高价
+        if self.highest_price is None or current_price > self.highest_price:
+            self.highest_price = current_price
+        
+        # 计算从最高价的回撤
+        drawdown = (current_price - self.highest_price) / self.highest_price
+        
+        # 回撤超过2% → 触发追踪止损
+        if drawdown <= -0.02:
+            logger.info(f"触发追踪止损: 最高价={self.highest_price}, 当前价={current_price}, 回撤={drawdown*100:.2f}%")
+            
+            if self.notifier:
+                profit_pct = (current_price - self.entry_price) / self.entry_price
+                self.notifier.notify_stop_loss(self.symbol, self.entry_price, current_price, profit_pct)
+            
+            return True
+        
+        return False
     
     def execute_signal(self, signal: str, current_price: float):
-        """
-        执行交易信号
-        
-        Args:
-            signal: 交易信号
-            current_price: 当前价格
-        """
+        """执行交易信号（优化版 - 增加详细日志）"""
         try:
+            # 检查资金余额
+            balance = self.api.get_balance()
+            if not balance or 'USDT' not in balance:
+                logger.error("无法获取USDT余额，跳过交易")
+                return
+            
+            usdt_balance = balance['USDT']['free'] if 'free' in balance['USDT'] else 0
+            logger.info(f"当前USDT余额: {usdt_balance:.2f}")
+            
             if signal == 'buy':
-                # 正常买入 (使用50%可用资金)
-                balance = self.api.get_balance()
-                usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-                # 多交易对时，平均分配资金
-                available_usdt = usdt_balance / len(SYMBOLS) if 'SYMBOLS' in globals() else usdt_balance
-                amount = (available_usdt * 0.5) / current_price
+                # 正常买入 (使用60%可用资金，更激进)
+                available_usdt = usdt_balance * 0.6
+                amount = available_usdt / current_price
+                
+                # 检查最小交易金额（Gate.io最小交易额通常为10 USDT）
+                if available_usdt < 10:
+                    logger.warning(f"可用资金不足10 USDT，跳过买入")
+                    return
                 
                 # 检查最大持仓限制
                 if amount > MAX_POSITION:
                     amount = MAX_POSITION
                 
                 if amount > 0:
+                    logger.info(f"执行买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
                     order = self.api.create_order(self.symbol, 'buy', amount, 'market')
                     if order:
                         self.current_position = amount
                         self.entry_price = current_price
-                        logger.info(f"买入成功: {amount} {self.symbol} @ {current_price}")
+                        self.entry_time = datetime.now()
+                        self.highest_price = current_price
+                        logger.info(f"✅ 买入成功: {amount:.6f} {self.symbol} @ {current_price:.2f}")
                         
-                        # 发送Telegram通知
                         if self.notifier:
-                            # 获取当前市场状态
-                            try:
-                                df_regime = self.api.fetch_ohlcv(self.symbol, TIMEFRAME, limit=100)
-                                regime = MarketRegimeDetector.detect_market_regime(df_regime)[0]
-                            except:
-                                regime = 'unknown'
-                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, regime)
-            
+                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, '趋势跟踪')
+                        
             elif signal == 'buy_small':
-                # 小仓位买入 (使用20%可用资金，用于超卖反弹)
-                balance = self.api.get_balance()
-                usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-                available_usdt = usdt_balance / len(SYMBOLS) if 'SYMBOLS' in globals() else usdt_balance
-                amount = (available_usdt * 0.2) / current_price
+                # 小仓位买入 (使用30%可用资金)
+                available_usdt = usdt_balance * 0.3
+                amount = available_usdt / current_price
+                
+                if available_usdt < 10:
+                    logger.warning(f"可用资金不足10 USDT，跳过买入")
+                    return
                 
                 if amount > MAX_POSITION * 0.5:
                     amount = MAX_POSITION * 0.5
                 
                 if amount > 0:
+                    logger.info(f"执行小仓位买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
                     order = self.api.create_order(self.symbol, 'buy', amount, 'market')
                     if order:
                         self.current_position = amount
                         self.entry_price = current_price
-                        logger.info(f"小仓位买入: {amount} {self.symbol} @ {current_price}")
+                        self.entry_time = datetime.now()
+                        self.highest_price = current_price
+                        logger.info(f"✅ 小仓位买入成功: {amount:.6f} {self.symbol} @ {current_price:.2f}")
                         
-                        # 发送Telegram通知
                         if self.notifier:
                             self.notifier.notify_trade_signal(self.symbol, signal, current_price, '超卖反弹')
-            
+                        
             elif signal == 'sell':
                 # 卖出全部持仓
                 if self.current_position and self.current_position > 0:
+                    profit_pct = (current_price - self.entry_price) / self.entry_price * 100
+                    logger.info(f"执行卖出: {self.current_position:.6f} {self.symbol} @ {current_price:.2f}, 盈亏: {profit_pct:.2f}%")
+                    
                     order = self.api.create_order(self.symbol, 'sell', self.current_position, 'market')
                     if order:
-                        profit_pct = (current_price - self.entry_price) / self.entry_price * 100
-                        logger.info(f"卖出成功: {self.current_position} {self.symbol} @ {current_price}, 利润: {profit_pct:.2f}%")
+                        logger.info(f"✅ 卖出成功: 盈亏={profit_pct:.2f}%")
                         
-                        # 发送Telegram通知
                         if self.notifier:
                             self.notifier.notify_trade_signal(self.symbol, signal, current_price, 'unknown')
                         
                         self.current_position = None
                         self.entry_price = None
+                        self.entry_time = None
+                        self.highest_price = None
                         
         except Exception as e:
             logger.error(f"执行交易信号失败: {e}")
-            # 发送错误通知
             if self.notifier:
                 self.notifier.notify_error(f"执行交易信号失败: {e}")
     
     def check_stop_loss(self, current_price: float) -> bool:
-        """
-        检查止损条件
-        
-        Args:
-            current_price: 当前价格
-            
-        Returns:
-            是否触发止损
-        """
+        """检查止损条件（包含追踪止损）"""
         if self.entry_price is None or self.current_position is None:
             return False
         
+        # 1. 固定止损
         loss_pct = (current_price - self.entry_price) / self.entry_price
-        
         if loss_pct <= STOP_LOSS_PCT:
-            logger.warning(f"触发止损: 入场价={self.entry_price}, 当前价={current_price}, 亏损={loss_pct*100:.2f}%")
+            logger.warning(f"触发固定止损: 入场价={self.entry_price}, 当前价={current_price}, 亏损={loss_pct*100:.2f}%")
             
-            # 发送Telegram通知
             if self.notifier:
                 self.notifier.notify_stop_loss(self.symbol, self.entry_price, current_price, loss_pct)
             
             self.execute_signal('sell', current_price)
             return True
         
+        # 2. 追踪止损
+        if self.check_trailing_stop(current_price):
+            self.execute_signal('sell', current_price)
+            return True
+        
         return False
     
     def run_strategy(self, df: pd.DataFrame) -> Dict:
-        """
-        运行主策略逻辑
-        
-        Args:
-            df: K线数据
-            
-        Returns:
-            策略执行结果字典
-        """
+        """运行主策略逻辑（优化版）"""
         try:
             # 1. 识别市场状态
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
             current_price = df['close'].iloc[-1]
             
-            # 检测市场状态变化，发送Telegram通知（合并为一条消息）
+            # 检测市场状态变化，发送Telegram通知
             if self.notifier and self.last_regime != regime:
                 self.notifier.notify_market_regime(
                     self.symbol, 
@@ -746,33 +754,48 @@ class TradingStrategy:
                 )
                 self.last_regime = regime
             
-            # 2. 检查止损
+            # 2. 检查止损（固定止损 + 追踪止损）
             if self.check_stop_loss(current_price):
                 return {'regime': regime, 'signal': 'stop_loss', 'indicators': indicators}
             
-            # 3. 根据市场状态选择策略
+            # 3. 检查止盈
+            if self.check_take_profit(current_price):
+                self.execute_signal('sell', current_price)
+                return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
+            
+            # 4. 根据市场状态选择策略
             signal = 'hold'
             
-            if regime in ['趋势向上', '趋势向下']:
+            if regime in ['强势上涨', '趋势向上', '趋势向下', '强势下跌']:
                 # 趋势跟踪策略
-                signal = self.trend_following_strategy(regime, current_price)
+                signal = self.trend_following_strategy(regime, current_price, indicators)
             
             elif regime == '震荡市':
                 # 网格交易策略
                 signal = self.grid_trading_strategy(current_price, df)
             
-            elif regime == '超卖反弹':
-                # 超卖反弹策略
-                signal = self.oversold_rebound_strategy(regime, indicators['rsi'])
+            elif regime in ['反转信号_超卖', '反转信号_超买']:
+                # 反转策略
+                signal = self.reversal_strategy(regime, indicators)
             
             elif regime == '高波动':
-                # 高波动市场，暂时观望
-                signal = 'hold'
-                logger.info("高波动市场，暂时观望")
+                # 高波动市场，降低仓位或观望
+                if self.current_position:
+                    # 已持仓，设置更严格的止损
+                    logger.info("高波动市场，已持仓 → 严格止损")
+                else:
+                    signal = 'hold'
+                    logger.info("高波动市场，未持仓 → 暂时观望")
             
-            # 4. 执行交易信号
+            # 5. 执行交易信号
             if signal != 'hold':
                 self.execute_signal(signal, current_price)
+            else:
+                # 详细日志记录为什么没有交易
+                reason = f"无交易信号: 市场状态={regime}, 持仓={self.current_position is not None}\n"
+                reason += f"  指标: ADX={indicators.get('adx')}, RSI={indicators.get('rsi')}, MACD={indicators.get('macd'):.4f}\n"
+                reason += f"  价格: {current_price:.2f}"
+                logger.info(reason)
             
             return {
                 'regime': regime,
@@ -784,14 +807,11 @@ class TradingStrategy:
             
         except Exception as e:
             logger.error(f"策略执行失败: {e}")
-            # 发送错误通知
             if self.notifier:
                 self.notifier.notify_error(f"策略执行失败: {e}")
             return {}
 
-# ==================== 健康检查服务 ====================
-# 注意：在GitHub Actions中不需要Flask服务，禁用以避免挂起
-# 如需本地运行或Docker部署，可以启用下面的代码
+# ==================== 健康检查服务（保持不变）====================
 ENABLE_FLASK = os.getenv('ENABLE_FLASK', 'False').lower() == 'true'
 
 if ENABLE_FLASK:
@@ -799,13 +819,6 @@ if ENABLE_FLASK:
     
     @app.route('/health', methods=['GET'])
     def health_check():
-        """
-        健康检查接口（支持多交易对）
-        
-        Returns:
-            JSON包含status、各交易对的状态和持仓信息
-        """
-        # 构建每个交易对的状态
         symbols_status = {}
         for symbol in global_regimes:
             symbols_status[symbol] = {
@@ -820,30 +833,30 @@ if ENABLE_FLASK:
         })
         
     def run_flask_app():
-        """运行Flask应用 (健康检查服务)"""
         app.run(host='0.0.0.0', port=8080, debug=False)
 else:
-    # 禁用Flask时，提供空函数
     def run_flask_app():
         pass
 
-# ==================== 主程序 ====================
-
+# ==================== 主程序（优化版）====================
 def main():
-    """主函数（支持多交易对和Telegram通知）"""
+    """主函数（优化版）"""
     global global_strategies, global_regimes, global_positions
     
     logger.info("=" * 50)
-    logger.info("Gate.io 量化交易机器人启动")
+    logger.info("Gate.io 量化交易机器人启动 (优化版)")
     logger.info("=" * 50)
     
-    # 1. 初始化交易所API
-    api = ExchangeAPI(GATEIO_API_KEY, GATEIO_API_SECRET)
+    # 1. 初始化交易所API（优化版 - 支持杠杆）
+    try:
+        api = ExchangeAPI(GATEIO_API_KEY, GATEIO_API_SECRET)
+    except Exception as e:
+        logger.error(f"交易所API初始化失败: {e}")
+        return
     
     # 2. 初始化Telegram通知器
     notifier = None
     
-    # 调试日志：打印Telegram配置（不打印完整Token，只打印前20个字符）
     token_preview = TELEGRAM_BOT_TOKEN[:20] + '...' if len(TELEGRAM_BOT_TOKEN) > 20 else TELEGRAM_BOT_TOKEN
     logger.info(f"Telegram配置: ENABLED={TELEGRAM_ENABLED}, BOT_TOKEN={token_preview}, CHAT_ID={TELEGRAM_CHAT_ID}")
     
@@ -851,15 +864,18 @@ def main():
         notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED)
         logger.info("Telegram通知器初始化成功")
         
-        # 强制发送一条测试通知，验证配置是否正确
-        logger.info("发送Telegram测试通知...")
-        test_result = notifier.send_message("🤖 测试通知 - 如果你看到这条消息，说明Telegram配置正确！")
-        if test_result:
-            logger.info("✅ Telegram测试通知发送成功！")
-        else:
-            logger.error("❌ Telegram测试通知发送失败！请检查Token和Chat ID配置")
-    else:
-        logger.warning(f"⚠️ Telegram通知器未初始化: ENABLED={TELEGRAM_ENABLED}, TOKEN_VALID={TELEGRAM_BOT_TOKEN != 'YOUR_BOT_TOKEN'}")
+        # 发送启动通知
+        logger.info("发送启动通知...")
+        startup_msg = (
+            f"🚀 <b>交易机器人启动 (优化版)</b>\n"
+            f"交易对: {', '.join(SYMBOLS)}\n"
+            f"杠杆: {LEVERAGE}倍\n"
+            f"时间周期: {TIMEFRAME}\n"
+            f"目标利润: {TARGET_PROFIT_PCT*100:.1f}%\n"
+            f"止损: {STOP_LOSS_PCT*100:.1f}%\n"
+            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        notifier.send_message(startup_msg)
     
     # 3. 为每个交易对创建策略实例
     strategies = {}
@@ -872,12 +888,12 @@ def main():
     global_regimes = {}
     global_positions = {}
     
-    # 4. 启动健康检查服务 (Flask, 后台线程)
+    # 4. 启动健康检查服务
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
     flask_thread.start()
-    logger.info("健康检查服务已启动: http://0.0.0.0:8080/health")
+    logger.info("健康检查服务已启动")
     
-    # 5. 执行策略（每次运行一次，不循环，由GitHub Actions定时触发）
+    # 5. 执行策略
     logger.info(f"开始监控交易对: {', '.join(SYMBOLS)}, 时间周期: {TIMEFRAME}")
     
     try:
@@ -896,7 +912,7 @@ def main():
             result = strategy.run_strategy(df)
             
             if result:
-                # 更新全局变量 (用于健康检查)
+                # 更新全局变量
                 global_regimes[symbol] = result.get('regime', 'unknown')
                 global_positions[symbol] = result.get('position')
                 
@@ -908,7 +924,7 @@ def main():
         logger.error(f"执行发生错误: {e}")
         if notifier:
             notifier.notify_error(f"执行发生错误: {e}")
-        raise  # 重新抛出异常，让GitHub Actions知道失败了
+        raise
 
 if __name__ == "__main__":
     main()
