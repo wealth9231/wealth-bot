@@ -42,7 +42,7 @@ except ImportError:
     RSI_OVERBOUGHT = 70
     BB_WIDTH_THRESHOLD = 0.05
     TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'True').lower() == 'true'
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGBQQJUu2tMSpnUereWPOo4t3lp_o-ejg")  # @GateWoBuy_bot
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8746796223:AAGR4wryx4Zj4TARb9yeC83KOqJQJThTzMo")  # @GateWoBuy_bot (已重置Token)
     TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "6204659239")  # 请确保此 Chat ID 正确
 
 # ==================== 日志配置 ====================
