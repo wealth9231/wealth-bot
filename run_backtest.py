@@ -21,7 +21,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from gate_trading_bot import (
     TechnicalIndicators, MarketRegimeDetector,
     TREND_ADX_THRESHOLD, BB_WIDTH_THRESHOLD,
-    STOP_LOSS_PCT, TARGET_PROFIT_PCT, GRID_NUM
+    STOP_LOSS_PCT, TARGET_PROFIT_PCT, GRID_NUM,
+    RSI_OVERSOLD, RSI_OVERBOUGHT  # 方案A：反转策略需要这两个常量
 )
 import ccxt
 import pandas as pd
@@ -51,26 +52,35 @@ class SimpleStrategy:
     
     def run(self, df: pd.DataFrame) -> str:
         """
-        运行策略，返回信号
+        运行策略（方案A - 反转策略/抄底逃顶）
+        
+        核心逻辑：
+        - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
+        - 卖出信号：RSI > 65 (超买) + 价格接近布林带上轨
+        - 适用场景：震荡市（BTC 70%时间在这里）
         
         Returns:
             'buy', 'sell', 'hold', 'sell_stop_loss', 'sell_take_profit'
         """
         try:
-            # 1. 识别市场状态
+            # 1. 识别市场状态（用于日志）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
             current_price = df['close'].iloc[-1]
+            rsi = indicators.get('rsi', 50)
+            stoch_k = indicators.get('stoch_k', 50)
             
             # 2. 检查止损/止盈（如果已持仓）
             if self.entry_price and self.position:
                 # 固定止损
                 loss_pct = (current_price - self.entry_price) / self.entry_price
                 if loss_pct <= STOP_LOSS_PCT:
+                    logger.info(f"📉 固定止损触发: 亏损={loss_pct*100:.2f}%")
                     return 'sell_stop_loss'
                 
                 # 止盈
                 profit_pct = (current_price - self.entry_price) / self.entry_price
                 if profit_pct >= TARGET_PROFIT_PCT:
+                    logger.info(f"📈 止盈触发: 盈利={profit_pct*100:.2f}%")
                     return 'sell_take_profit'
                 
                 # 追踪止损
@@ -79,37 +89,49 @@ class SimpleStrategy:
                 
                 drawdown = (current_price - self.highest_price) / self.highest_price
                 if drawdown <= -0.02:
+                    logger.info(f"📉 追踪止损触发: 回撤={drawdown*100:.2f}%")
                     return 'sell_trailing_stop'
             
-            # 3. 生成交易信号
+            # 3. 【方案A】反转策略（抄底逃顶）
             signal = 'hold'
             
-            if regime in ['强势上涨', '趋势向上']:
-                if self.position is None:
+            # 计算布林带位置
+            upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
+            bb_position = (current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])  # 0=下轨, 1=上轨
+            
+            # === 买入信号：抄底 ===
+            if self.position is None:
+                # 条件1：RSI 超卖 (< 35)
+                # 条件2：价格接近布林带下轨 (bb_position < 0.3)
+                if rsi < RSI_OVERSOLD and bb_position < 0.3:
+                    logger.info(f"🟢 反转策略买入: RSI={rsi:.1f} < {RSI_OVERSOLD}, 布林带位置={bb_position:.2f} < 0.3")
                     signal = 'buy'
-            
-            elif regime in ['强势下跌', '趋势向下']:
-                if self.position is not None:
-                    signal = 'sell'
-            
-            elif regime == '震荡市':
-                # 网格策略
-                upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
-                grid_spacing = (upper.iloc[-1] - lower.iloc[-1]) / GRID_NUM
-                grid_level = (current_price - lower.iloc[-1]) / grid_spacing
                 
-                if grid_level < GRID_NUM * 0.4 and self.position is None:
+                # 特殊情况：RSI 极度超卖 (< 25) + Stoch RSI 极度超卖 (< 15)
+                elif rsi < 25 and stoch_k < 15:
+                    logger.info(f"🟢 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
                     signal = 'buy'
-                elif grid_level > GRID_NUM * 0.6 and self.position is not None:
-                    signal = 'sell'
+                
+                else:
+                    reason = f"🟡 无买入信号: RSI={rsi:.1f}, 布林带位置={bb_position:.2f}"
+                    logger.info(reason)
             
-            elif regime == '反转信号_超卖':
-                if self.position is None:
-                    signal = 'buy'
-            
-            elif regime == '反转信号_超买':
-                if self.position is not None:
+            # === 卖出信号：逃顶 ===
+            elif self.position is not None:
+                # 条件1：RSI 超买 (> 65)
+                # 条件2：价格接近布林带上轨 (bb_position > 0.7)
+                if rsi > RSI_OVERBOUGHT and bb_position > 0.7:
+                    logger.info(f"🔴 反转策略卖出: RSI={rsi:.1f} > {RSI_OVERBOUGHT}, 布林带位置={bb_position:.2f} > 0.7")
                     signal = 'sell'
+                
+                # 特殊情况：RSI 极度超买 (> 75) + Stoch RSI 极度超买 (> 85)
+                elif rsi > 75 and stoch_k > 85:
+                    logger.info(f"🔴 反转策略卖出(极度超买): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                    signal = 'sell'
+                
+                else:
+                    reason = f"🟡 无卖出信号: RSI={rsi:.1f}, 布林带位置={bb_position:.2f}"
+                    logger.info(reason)
             
             return signal
             

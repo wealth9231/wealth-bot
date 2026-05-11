@@ -551,23 +551,59 @@ class TradingStrategy:
             logger.error(f"网格策略计算失败: {e}")
             return 'hold'
     
-    def reversal_strategy(self, regime: str, indicators: Dict) -> str:
+    def reversal_strategy(self, regime: str, indicators: Dict, df: pd.DataFrame) -> str:
         """
-        反转策略（新增 - 捕捉超卖反弹和超买回调）
+        反转策略（方案A - 抄底逃顶）
         
-        适用场景：
-        - '反转信号_超卖' → 买入
-        - '反转信号_超买' → 卖出
+        核心逻辑：
+        - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
+        - 卖出信号：RSI > 65 (超买) + 价格接近布林带上轨
+        - 适用场景：震荡市（BTC 70%时间在这里）
+        
+        返回：'buy', 'sell', 'hold'
         """
+        rsi = indicators.get('rsi', 50)
         stoch_k = indicators.get('stoch_k', 50)
+        current_price = df['close'].iloc[-1]
         
-        if regime == '反转信号_超卖' and self.current_position is None:
-            logger.info(f"反转策略: {regime} (Stoch RSI={stoch_k:.1f}) → 买入")
-            return 'buy_small'
-        elif regime == '反转信号_超买' and self.current_position is not None:
-            logger.info(f"反转策略: {regime} (Stoch RSI={stoch_k:.1f}) → 卖出")
-            return 'sell'
-        else:
+        try:
+            # 计算布林带位置
+            upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
+            bb_position = (current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])  # 0=下轨, 1=上轨
+            
+            # === 买入信号：抄底 ===
+            if self.current_position is None:
+                # 条件1：RSI 超卖 (< 35)
+                # 条件2：价格接近布林带下轨 (bb_position < 0.3)
+                # 条件3：Stoch RSI 超卖 (< 20) - 额外确认
+                if rsi < RSI_OVERSOLD and bb_position < 0.3:
+                    logger.info(f"🟢 反转策略买入: RSI={rsi:.1f} < {RSI_OVERSOLD}, 布林带位置={bb_position:.2f} < 0.3")
+                    return 'buy'
+                
+                # 特殊情况：RSI 极度超卖 (< 25) + Stoch RSI 极度超卖 (< 15)
+                elif rsi < 25 and stoch_k < 15:
+                    logger.info(f"🟢 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                    return 'buy'
+            
+            # === 卖出信号：逃顶 ===
+            elif self.current_position is not None:
+                # 条件1：RSI 超买 (> 65)
+                # 条件2：价格接近布林带上轨 (bb_position > 0.7)
+                # 条件3：Stoch RSI 超买 (> 80) - 额外确认
+                if rsi > RSI_OVERBOUGHT and bb_position > 0.7:
+                    logger.info(f"🔴 反转策略卖出: RSI={rsi:.1f} > {RSI_OVERBOUGHT}, 布林带位置={bb_position:.2f} > 0.7")
+                    return 'sell'
+                
+                # 特殊情况：RSI 极度超买 (> 75) + Stoch RSI 极度超买 (> 85)
+                elif rsi > 75 and stoch_k > 85:
+                    logger.info(f"🔴 反转策略卖出(极度超买): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                    return 'sell'
+            
+            # 持有
+            return 'hold'
+            
+        except Exception as e:
+            logger.error(f"反转策略计算失败: {e}")
             return 'hold'
     
     def check_take_profit(self, current_price: float) -> bool:
@@ -736,9 +772,16 @@ class TradingStrategy:
         return False
     
     def run_strategy(self, df: pd.DataFrame) -> Dict:
-        """运行主策略逻辑（优化版）"""
+        """
+        运行主策略逻辑（方案A - 反转策略）
+        
+        核心逻辑：
+        - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
+        - 卖出信号：RSI > 65 (超买) + 价格接近布林带上轨
+        - 适用场景：震荡市（BTC 70%时间在这里）
+        """
         try:
-            # 1. 识别市场状态
+            # 1. 识别市场状态（用于日志记录和Telegram通知）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
             current_price = df['close'].iloc[-1]
             
@@ -763,38 +806,22 @@ class TradingStrategy:
                 self.execute_signal('sell', current_price)
                 return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
             
-            # 4. 根据市场状态选择策略
-            signal = 'hold'
-            
-            if regime in ['强势上涨', '趋势向上', '趋势向下', '强势下跌']:
-                # 趋势跟踪策略
-                signal = self.trend_following_strategy(regime, current_price, indicators)
-            
-            elif regime == '震荡市':
-                # 网格交易策略
-                signal = self.grid_trading_strategy(current_price, df)
-            
-            elif regime in ['反转信号_超卖', '反转信号_超买']:
-                # 反转策略
-                signal = self.reversal_strategy(regime, indicators)
-            
-            elif regime == '高波动':
-                # 高波动市场，降低仓位或观望
-                if self.current_position:
-                    # 已持仓，设置更严格的止损
-                    logger.info("高波动市场，已持仓 → 严格止损")
-                else:
-                    signal = 'hold'
-                    logger.info("高波动市场，未持仓 → 暂时观望")
+            # 4. 【方案A】始终使用反转策略（抄底逃顶）
+            signal = self.reversal_strategy(regime, indicators, df)
             
             # 5. 执行交易信号
             if signal != 'hold':
                 self.execute_signal(signal, current_price)
             else:
                 # 详细日志记录为什么没有交易
-                reason = f"无交易信号: 市场状态={regime}, 持仓={self.current_position is not None}\n"
-                reason += f"  指标: ADX={indicators.get('adx')}, RSI={indicators.get('rsi')}, MACD={indicators.get('macd'):.4f}\n"
-                reason += f"  价格: {current_price:.2f}"
+                rsi = indicators.get('rsi', 50)
+                stoch_k = indicators.get('stoch_k', 50)
+                reason = f"🟡 无交易信号 (反转策略)\n"
+                reason += f"  市场状态: {regime}\n"
+                reason += f"  持仓状态: {'已持仓' if self.current_position else '未持仓'}\n"
+                reason += f"  指标: RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}\n"
+                reason += f"  买入条件: RSI < {RSI_OVERSOLD} (超卖) + 价格接近布林带下轨\n"
+                reason += f"  卖出条件: RSI > {RSI_OVERBOUGHT} (超买) + 价格接近布林带上轨"
                 logger.info(reason)
             
             return {
