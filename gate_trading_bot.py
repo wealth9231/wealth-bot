@@ -106,16 +106,24 @@ class ExchangeAPI:
             return {}
     
     def create_order(self, symbol: str, side: str, amount: float, 
-                     order_type: str = 'market', price: Optional[float] = None) -> Dict:
-        """创建订单（自动区分现货/杠杆）"""
+                     order_type: str = 'market', price: Optional[float] = None, 
+                     cost: float = None) -> Dict:
+        """创建订单（自动区分现货/杠杆）
+        
+        Args:
+            symbol: 交易对
+            side: buy/sell
+            amount: 数量（sell时为base数量，buy时为quote金额）
+            order_type: market/limit
+            price: 限价单价格
+            cost: market buy时的USDT金额（可选）
+        """
         try:
             # 根据交易对决定是否使用杠杆
-            # 格式：BTC/USDT → 现货；BTC/USDT:USDT → 杠杆
             is_margin = ':' in symbol
             
             # 🔍 调试：打印订单参数
-            logger.info(f"创建订单: symbol={symbol}, side={side}, amount={amount:.10f}, order_type={order_type}, price={price}")
-            logger.info(f"amount类型: {type(amount)}, 格式化后: {amount}")
+            logger.info(f"创建订单: symbol={symbol}, side={side}, amount={amount:.10f}, order_type={order_type}, price={price}, cost={cost}")
             
             params = {}
             if is_margin:
@@ -124,8 +132,12 @@ class ExchangeAPI:
                     'leverage': LEVERAGE,
                 }
             
-            # 使用 CCXT 标准 create_order 方法
-            # 签名: create_order(symbol, type, side, amount, price=None, params={})
+            # 对于 market buy，使用 cost 参数指定 USDT 金额
+            # 这样可以避免 base currency 数量精度问题
+            if order_type == 'market' and side == 'buy' and cost is not None:
+                params['cost'] = cost
+                logger.info(f"使用 cost 参数: {cost} USDT")
+            
             if order_type == 'market':
                 order = self.exchange.create_order(symbol, 'market', side, amount, None, params)
             else:
@@ -872,65 +884,55 @@ class TradingStrategy:
             
             if signal == 'buy':
                 # 正常买入 (使用全部可用资金)
+                # 注意：对于 Gate.io spot market buy，amount 是 USDT 金额（quote currency）
                 available_usdt = usdt_balance  # 使用全部余额
-                amount = available_usdt / current_price
                 
                 # 检查最小交易金额（Gate.io最小交易额为5 USDT）
                 if available_usdt < 5:
                     logger.warning(f"可用资金不足5 USDT，跳过买入")
                     return
                 
-                # 检查最大持仓限制
-                if amount > MAX_POSITION:
-                    amount = MAX_POSITION
+                # market buy 传入 USDT 金额
+                cost = available_usdt
                 
-                # 根据交易所要求格式化数量精度
-                # Gate.io 最小精度：BTC=0.000001, ETH=0.001, SOL=0.001, BNB=0.001, DOGE=1
-                amount = self._format_amount(self.symbol, amount)
-                
-                if amount > 0:
-                    logger.info(f"执行买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
-                    order = self.api.create_order(self.symbol, 'buy', amount, 'market')
-                    if order:
-                        self.current_position = amount
-                        self.entry_price = current_price
-                        self.entry_time = datetime.now()
-                        self.highest_price = current_price
-                        logger.info(f"✅ 买入成功: {amount:.6f} {self.symbol} @ {current_price:.2f}")
-                        
-                        if self.notifier:
-                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, '趋势跟踪')
+                logger.info(f"执行买入: ${cost:.2f} USDT → {self.symbol} @ {current_price:.2f}")
+                # 使用 cost 参数指定 USDT 金额
+                order = self.api.create_order(self.symbol, 'buy', cost, 'market', cost=cost)
+                if order:
+                    # 从订单结果中获取实际买入的数量
+                    filled_amount = order.get('filled', 0)
+                    self.current_position = filled_amount
+                    self.entry_price = current_price
+                    self.entry_time = datetime.now()
+                    self.highest_price = current_price
+                    logger.info(f"✅ 买入成功: ${cost:.2f} USDT → {filled_amount:.6f} {self.symbol}")
+                    
+                    if self.notifier:
+                        self.notifier.notify_trade_signal(self.symbol, signal, current_price, '趋势跟踪')
                         
             elif signal == 'buy_small':
                 # 小仓位买入 (使用30%可用资金)
                 available_usdt = usdt_balance * 0.3
-                amount = available_usdt / current_price
                 
                 if available_usdt < 5:
                     logger.warning(f"可用资金不足5 USDT，跳过买入")
                     return
                 
-                # 根据交易所要求格式化数量精度
-                amount = self._format_amount(self.symbol, amount)
+                # market buy 传入 USDT 金额
+                cost = available_usdt
                 
-                if amount > MAX_POSITION * 0.5:
-                    amount = MAX_POSITION * 0.5
-                
-                if amount > 0:
-                    # 根据交易所要求格式化数量精度
-                    amount = self._format_amount(self.symbol, amount)
+                logger.info(f"执行小仓位买入: ${cost:.2f} USDT → {self.symbol} @ {current_price:.2f}")
+                order = self.api.create_order(self.symbol, 'buy', cost, 'market', cost=cost)
+                if order:
+                    filled_amount = order.get('filled', 0)
+                    self.current_position = filled_amount
+                    self.entry_price = current_price
+                    self.entry_time = datetime.now()
+                    self.highest_price = current_price
+                    logger.info(f"✅ 小仓位买入成功: ${cost:.2f} USDT → {filled_amount:.6f} {self.symbol}")
                     
-                    logger.info(f"执行小仓位买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
-                    order = self.api.create_order(self.symbol, 'buy', amount, 'market')
-                    if order:
-                        self.current_position = amount
-                        self.entry_price = current_price
-                        self.entry_time = datetime.now()
-                        self.highest_price = current_price
-                        logger.info(f"✅ 小仓位买入成功: {amount:.6f} {self.symbol} @ {current_price:.2f}")
-                        
-                        if self.notifier:
-                            self.notifier.notify_trade_signal(self.symbol, signal, current_price, '超卖反弹')
+                    if self.notifier:
+                        self.notifier.notify_trade_signal(self.symbol, signal, current_price, '超卖反弹')
                         
             elif signal == 'sell':
                 # 卖出全部持仓
