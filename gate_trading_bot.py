@@ -734,9 +734,9 @@ class TradingStrategy:
                 available_usdt = usdt_balance * 0.6
                 amount = available_usdt / current_price
                 
-                # 检查最小交易金额（Gate.io最小交易额通常为10 USDT）
-                if available_usdt < 10:
-                    logger.warning(f"可用资金不足10 USDT，跳过买入")
+                # 检查最小交易金额（Gate.io最小交易额为5 USDT）
+                if available_usdt < 5:
+                    logger.warning(f"可用资金不足5 USDT，跳过买入")
                     return
                 
                 # 检查最大持仓限制
@@ -761,8 +761,8 @@ class TradingStrategy:
                 available_usdt = usdt_balance * 0.3
                 amount = available_usdt / current_price
                 
-                if available_usdt < 10:
-                    logger.warning(f"可用资金不足10 USDT，跳过买入")
+                if available_usdt < 5:
+                    logger.warning(f"可用资金不足5 USDT，跳过买入")
                     return
                 
                 if amount > MAX_POSITION * 0.5:
