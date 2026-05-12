@@ -1043,6 +1043,10 @@ class TradingStrategy:
             elif signal == 'sell':
                 # 卖出全部持仓（只卖spot账户的可用余额）
                 if self.current_position and self.current_position > 0:
+                    # 修复：entry_price 为 None 时，使用当前价
+                    if self.entry_price is None:
+                        self.entry_price = current_price
+                        logger.warning(f"🔄 entry_price为None，使用当前价: {current_price}")
                     profit_pct = (current_price - self.entry_price) / self.entry_price * 100
                     logger.info(f"执行卖出: {self.current_position:.6f} {self.symbol} @ {current_price:.2f}, 盈亏: {profit_pct:.2f}%")
                     
@@ -1085,6 +1089,16 @@ class TradingStrategy:
                     # 直接清空order_id即可
                     self.tp_order_id = None
                     self.sl_order_id = None
+                    
+                    # 检查卖出数量是否有效
+                    if sell_amount <= 0:
+                        logger.warning(f"🔄 卖出数量为0（小于最小交易单位），跳过卖出: {self.symbol}")
+                        # 清空状态（这些微量持仓无法交易）
+                        self.current_position = None
+                        self.entry_price = None
+                        self.entry_time = None
+                        self.highest_price = None
+                        return
                     
                     order = self.api.create_order(self.symbol, 'sell', sell_amount, 'market')
                     if order:
