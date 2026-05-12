@@ -415,76 +415,210 @@ class TelegramNotifier:
             return False
     
     def notify_trade_signal(self, symbol: str, signal: str, price: float, regime: str) -> bool:
-        """通知交易信号"""
-        emoji = "🟢" if signal == 'buy' else "🔴" if signal == 'sell' else "🟡"
-        message = (
-            f"{emoji} <b>交易信号</b>\n"
-            f"交易对: {symbol}\n"
-            f"信号: {signal.upper()}\n"
-            f"价格: {price:.2f} USDT\n"
-            f"市场状态: {regime}\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        """通知交易信号（醒目版本）"""
+        short_name = symbol.replace('/USDT', '')
+        time_str = datetime.now().strftime('%H:%M:%S')
+        
+        if signal == 'buy':
+            message = (
+                f"🟢🟢🟢 <b>买入信号触发</b> 🟢🟢🟢\n"
+                f"\n"
+                f"<b>📊 {short_name}</b>  @  <code>${price:,.2f}</code>\n"
+                f"市场状态: {regime}\n"
+                f"\n"
+                f"⏰ <code>{time_str}</code>"
+            )
+        elif signal == 'sell':
+            message = (
+                f"🔴🔴🔴 <b>卖出信号触发</b> 🔴🔴🔴\n"
+                f"\n"
+                f"<b>📊 {short_name}</b>  @  <code>${price:,.2f}</code>\n"
+                f"市场状态: {regime}\n"
+                f"\n"
+                f"⏰ <code>{time_str}</code>"
+            )
+        else:
+            message = (
+                f"🟡 <b>交易信号</b>\n"
+                f"{short_name}  @  ${price:,.2f}\n"
+                f"信号: {signal.upper()}\n"
+                f"市场状态: {regime}\n"
+                f"⏰ {time_str}"
+            )
         return self.send_message(message)
     
     def notify_stop_loss(self, symbol: str, entry_price: float, current_price: float, loss_pct: float) -> bool:
-        """通知止损触发"""
+        """通知止损触发（醒目版本）"""
+        short_name = symbol.replace('/USDT', '')
+        time_str = datetime.now().strftime('%H:%M:%S')
         message = (
-            f"🔴 <b>止损触发</b>\n"
-            f"交易对: {symbol}\n"
-            f"入场价: {entry_price:.2f}\n"
-            f"当前价: {current_price:.2f}\n"
-            f"亏损: {loss_pct*100:.2f}%\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🔴🔴🔴 <b>止损触发</b> 🔴🔴🔴\n"
+            f"\n"
+            f"<b>📊 {short_name}</b>\n"
+            f"├ 入场价: <code>${entry_price:,.2f}</code>\n"
+            f"├ 当前价: <code>${current_price:,.2f}</code>\n"
+            f"└ 📉 亏损: <b>{loss_pct*100:.2f}%</b>\n"
+            f"\n"
+            f"⏰ <code>{time_str}</code>"
         )
         return self.send_message(message)
     
     def notify_take_profit(self, symbol: str, entry_price: float, current_price: float, profit_pct: float) -> bool:
-        """通知止盈触发"""
+        """通知止盈触发（醒目版本）"""
+        short_name = symbol.replace('/USDT', '')
+        time_str = datetime.now().strftime('%H:%M:%S')
         message = (
-            f"🟢 <b>止盈触发</b>\n"
-            f"交易对: {symbol}\n"
-            f"入场价: {entry_price:.2f}\n"
-            f"当前价: {current_price:.2f}\n"
-            f"盈利: {profit_pct*100:.2f}%\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🟢🟢🟢 <b>止盈触发</b> 🟢🟢🟢\n"
+            f"\n"
+            f"<b>📊 {short_name}</b>\n"
+            f"├ 入场价: <code>${entry_price:,.2f}</code>\n"
+            f"├ 当前价: <code>${current_price:,.2f}</code>\n"
+            f"└ 📈 盈利: <b>+{profit_pct*100:.2f}%</b>\n"
+            f"\n"
+            f"⏰ <code>{time_str}</code>"
         )
         return self.send_message(message)
     
     def notify_error(self, error_msg: str) -> bool:
-        """通知错误"""
+        """通知错误（醒目版本）"""
+        time_str = datetime.now().strftime('%H:%M:%S')
+        # 截断过长的错误消息
+        if len(error_msg) > 300:
+            error_msg = error_msg[:297] + "..."
         message = (
             f"⚠️ <b>系统错误</b>\n"
-            f"{error_msg}\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"\n"
+            f"<code>{error_msg}</code>\n"
+            f"\n"
+            f"⏰ <code>{time_str}</code>"
         )
         return self.send_message(message)
+    
+    def _get_regime_emoji(self, regime: str) -> str:
+        """根据市场状态返回emoji"""
+        regime_emoji_map = {
+            '强势上涨': '🟢',
+            '趋势向上': '📈',
+            '强势下跌': '🔴',
+            '趋势向下': '📉',
+            '震荡市': '⚪',
+            '趋势不明': '⚪',
+        }
+        return regime_emoji_map.get(regime, '⚪')
+    
+    def _get_signal_emoji(self, rsi: float, rsi_oversold: float, rsi_overbought: float) -> str:
+        """根据RSI返回信号emoji"""
+        if rsi < rsi_oversold:
+            return '🟢 买入'
+        elif rsi > rsi_overbought:
+            return '🔴 卖出'
+        else:
+            return '⚪ 持有'
+    
+    def notify_market_summary(self, symbols_data: list, usdt_balance: float = None) -> bool:
+        """
+        发送市场状态汇总消息（所有交易对合并为1条）
+        
+        symbols_data: 列表，每个元素是字典：
+        {
+            'symbol': 'BTC/USDT',
+            'regime': '强势下跌',
+            'rsi': 24.36,
+            'adx': 35.12,
+            'price': 80846.4,
+            'position': None,  # 或持仓数量
+            'signal': 'buy'    # buy/sell/hold
+        }
+        """
+        from config import RSI_OVERSOLD, RSI_OVERBOUGHT
+        
+        time_str = datetime.now().strftime('%H:%M:%S')
+        
+        # 构建汇总消息头部
+        lines = [
+            f"📊 <b>市场状态监控</b>  <code>{time_str}</code>",
+            "",
+        ]
+        
+        # 统计信息
+        buy_count = sum(1 for d in symbols_data if d.get('signal') == 'buy')
+        sell_count = sum(1 for d in symbols_data if d.get('signal') == 'sell')
+        hold_count = len(symbols_data) - buy_count - sell_count
+        
+        # 添加统计行
+        stats = []
+        if buy_count > 0:
+            stats.append(f"📥 {buy_count}个买入")
+        if sell_count > 0:
+            stats.append(f"📤 {sell_count}个卖出")
+        if hold_count > 0:
+            stats.append(f"⏸ {hold_count}个持有")
+        
+        lines.append(" | ".join(stats))
+        lines.append("")
+        
+        # 添加每个交易对的信息
+        for data in symbols_data:
+            symbol = data['symbol']
+            regime = data.get('regime', 'unknown')
+            rsi = data.get('rsi', 50)
+            adx = data.get('adx', 0)
+            price = data.get('price', 0)
+            position = data.get('position')
+            signal = data.get('signal', 'hold')
+            
+            # 简化的交易对名称
+            short_name = symbol.replace('/USDT', '')
+            
+            # 市场状态emoji
+            regime_emoji = self._get_regime_emoji(regime)
+            
+            # RSI状态
+            rsi_emoji = '🟢' if rsi < RSI_OVERSOLD else '🔴' if rsi > RSI_OVERBOUGHT else '⚪'
+            rsi_bar = self._get_rsi_bar(rsi, RSI_OVERSOLD, RSI_OVERBOUGHT)
+            
+            # 持仓状态
+            pos_status = f"📦 持仓 {position:.6f}" if position else "⭕ 空仓"
+            
+            # 信号
+            sig_emoji = {'buy': '📥 买入', 'sell': '📤 卖出', 'hold': '⏸ 持有'}.get(signal, '⏸ 持有')
+            
+            # 构建交易对信息（紧凑格式）
+            lines.append(
+                f"<b>{regime_emoji} {short_name}</b>  {regime}\n"
+                f"  ├ {rsi_bar} RSI:{rsi:.1f} {rsi_emoji}\n"
+                f"  ├ 价格: ${price:,.2f} │ ADX:{adx:.1f}\n"
+                f"  ├ {pos_status}\n"
+                f"  └ {sig_emoji}"
+            )
+        
+        # 添加余额信息
+        if usdt_balance is not None:
+            lines.append("")
+            lines.append(f"💰 <b>USDT余额:</b> ${usdt_balance:.2f}")
+        
+        # 添加策略说明
+        lines.append("")
+        lines.append(f"<i>策略: RSI&lt;{RSI_OVERSOLD}买入 │ RSI&gt;{RSI_OVERBOUGHT}卖出</i>")
+        
+        message = "\n".join(lines)
+        return self.send_message(message)
+    
+    def _get_rsi_bar(self, rsi: float, oversold: float, overbought: float) -> str:
+        """生成RSI进度条"""
+        # 0-100 映射到 0-10
+        bar_len = 10
+        filled = int(rsi / 100 * bar_len)
+        bar = '█' * filled + '░' * (bar_len - filled)
+        return f"<code>[{bar}]</code>"
     
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
                               entry_price: float = None, current_price: float = None) -> bool:
-        """通知市场状态（合并持仓信息）"""
-        position_status = "已开仓 ✅" if current_position else "未开仓 ⭕"
-        profit_info = ""
-        if current_position and entry_price and current_price:
-            profit_pct = (current_price - entry_price) / entry_price * 100
-            profit_emoji = "📈" if profit_pct >= 0 else "📉"
-            profit_info = f"{profit_emoji} 盈亏: {profit_pct:+.2f}% ({'盈利' if profit_pct >= 0 else '亏损'})\n"
-        
-        message = (
-            f"📊 <b>市场状态更新</b>\n"
-            f"交易对: {symbol}\n"
-            f"市场状态: {regime}\n"
-            f"持仓状态: {position_status}\n"
-            f"ADX: {indicators.get('adx', 'N/A')}\n"
-            f"RSI: {indicators.get('rsi', 'N/A')}\n"
-            f"MACD: {indicators.get('macd', 'N/A')}\n"
-            f"Stoch RSI: {indicators.get('stoch_k', 'N/A')}\n"
-            f"当前价格: {current_price or 'N/A'}\n"
-            f"{profit_info}"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        return self.send_message(message)
+        """通知市场状态（兼容旧版本，现在建议使用 notify_market_summary）"""
+        # 新版改为汇总发送，单条不再发送
+        # 保留此方法用于兼容
+        return True
 
 # ==================== 策略模块（优化版）====================
 class TradingStrategy:
@@ -1013,23 +1147,27 @@ def main():
         notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED)
         logger.info("Telegram通知器初始化成功")
         
-        # 发送启动通知
+        # 发送启动通知（新版：紧凑美观）
         logger.info("发送启动通知...")
+        short_symbols = [s.replace('/USDT', '') for s in SYMBOLS]
         startup_msg = (
-            f"🚀 <b>交易机器人启动 (优化版)</b>\n"
-            f"交易对: {', '.join(SYMBOLS)}\n"
-            f"杠杆: {LEVERAGE}倍\n"
-            f"时间周期: {TIMEFRAME}\n"
-            f"目标利润: {TARGET_PROFIT_PCT*100:.1f}%\n"
-            f"止损: {STOP_LOSS_PCT*100:.1f}%\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🚀 <b>Gate.io 交易机器人启动</b>\n"
+            f"\n"
+            f"<b>⚙️ 配置参数</b>\n"
+            f"├ 交易对: {' '.join(short_symbols)}\n"
+            f"├ 杠杆: {LEVERAGE}x │ 周期: {TIMEFRAME}\n"
+            f"├ 目标: {TARGET_PROFIT_PCT*100:.1f}% │ 止损: {STOP_LOSS_PCT*100:.1f}%\n"
+            f"├ 买入: RSI&lt;{RSI_OVERSOLD} │ 卖出: RSI&gt;{RSI_OVERBOUGHT}\n"
+            f"└ ADX门槛: {TREND_ADX_THRESHOLD} │ 最小盈亏比: {MIN_RR_RATIO}\n"
+            f"\n"
+            f"⏰ <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
         )
         notifier.send_message(startup_msg)
     
-    # 3. 为每个交易对创建策略实例
+    # 3. 为每个交易对创建策略实例（不传入notifier，避免单独发通知）
     strategies = {}
     for symbol in SYMBOLS:
-        strategies[symbol] = TradingStrategy(api, symbol, notifier)
+        strategies[symbol] = TradingStrategy(api, symbol, None)  # 不传notifier，汇总发送
         logger.info(f"初始化交易对: {symbol}")
     
     # 更新全局变量
@@ -1045,7 +1183,19 @@ def main():
     # 5. 执行策略
     logger.info(f"开始监控交易对: {', '.join(SYMBOLS)}, 时间周期: {TIMEFRAME}")
     
+    # 收集所有交易对的数据，汇总发送
+    symbols_summary = []
+    usdt_balance = 0
+    
     try:
+        # 先获取余额
+        try:
+            balance = api.get_balance('spot')
+            usdt_balance = balance.get('USDT', {}).get('free', 0)
+            logger.info(f"当前USDT余额: {usdt_balance:.2f}")
+        except Exception as e:
+            logger.warning(f"获取余额失败: {e}")
+        
         for symbol in SYMBOLS:
             logger.info(f"\n处理交易对: {symbol}")
             
@@ -1065,7 +1215,25 @@ def main():
                 global_regimes[symbol] = result.get('regime', 'unknown')
                 global_positions[symbol] = result.get('position')
                 
+                # 收集汇总数据
+                indicators = result.get('indicators', {})
+                current_price = df['close'].iloc[-1]
+                
+                symbols_summary.append({
+                    'symbol': symbol,
+                    'regime': result.get('regime', 'unknown'),
+                    'rsi': indicators.get('rsi', 50),
+                    'adx': indicators.get('adx', 0),
+                    'price': current_price,
+                    'position': result.get('position'),
+                    'signal': result.get('signal', 'hold')
+                })
+                
                 logger.info(f"{symbol} 策略执行完成: 市场状态={result['regime']}, 信号={result['signal']}")
+        
+        # 发送汇总通知
+        if notifier and symbols_summary:
+            notifier.notify_market_summary(symbols_summary, usdt_balance)
         
         logger.info("本次执行完成，等待下次触发...")
             
