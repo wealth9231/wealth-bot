@@ -987,59 +987,66 @@ class TradingStrategy:
     
     def sync_position_from_exchange(self):
         """
-        从交易所查询实际持仓，同步到 self.current_position
+        从交易所查询实际持仓（所有账户类型），同步到 self.current_position
         解决重启后内存状态丢失的问题
-        过滤极小余额（<$0.5），避免残留/空投被误识别为持仓
         """
         try:
-            MIN_POSITION_VALUE = 0.5  # 最小持仓价值（美元），低于此值忽略
-            
-            # 查询现货余额
-            balance = self.api.get_balance()
-            if not balance:
-                return
-            
-            # 获取基础币种（如 BTC、ETH）
+            MIN_POSITION_VALUE = 0.1  # 最小持仓价值（美元）
             base_currency = self.symbol.split('/')[0]
             
-            # 查询该币种的持仓
-            if base_currency in balance and balance[base_currency]['free'] > 0:
-                actual_position = balance[base_currency]['free']
-                
-                # 获取当前价格，计算持仓价值
+            # 查询所有账户类型
+            account_types = ['spot', 'margin', 'funding', 'future']
+            total_position = 0
+            found_in = []
+            
+            for acc_type in account_types:
                 try:
-                    ticker = self.api.exchange.fetch_ticker(self.symbol)
-                    current_price = ticker['last']
-                    position_value = actual_position * current_price
-                except Exception:
-                    position_value = float('inf')  # 无法获取价格时，不过滤
-                
-                # 过滤极小持仓
+                    balance = self.api.get_balance(acc_type)
+                    if balance and base_currency in balance:
+                        amount = balance[base_currency].get('free', 0) + balance[base_currency].get('used', 0)
+                        if amount > 0:
+                            total_position += amount
+                            found_in.append(acc_type)
+                            logger.info(f"🔄 发现持仓: {base_currency} {amount:.6f} 在 {acc_type} 账户")
+                except Exception as e:
+                    logger.debug(f"查询 {acc_type} 账户失败: {e}")
+                    continue
+            
+            # 获取当前价格计算价值
+            try:
+                ticker = self.api.exchange.fetch_ticker(self.symbol)
+                current_price = ticker['last']
+                position_value = total_position * current_price
+            except Exception:
+                position_value = float('inf')
+            
+            # 更新持仓状态
+            if total_position > 0:
                 if position_value < MIN_POSITION_VALUE:
-                    logger.info(f"🔄 忽略极小持仓: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f} < ${MIN_POSITION_VALUE})")
+                    logger.info(f"🔄 忽略极小持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
                     return
                 
-                if self.current_position is None:
-                    logger.info(f"🔄 同步持仓: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
-                    self.current_position = actual_position
-                    # 尝试从最近成交记录获取入场价
-                    if self.entry_price is None:
-                        try:
-                            trades = self.api.exchange.fetch_my_trades(self.symbol, limit=5)
-                            for trade in reversed(trades):
-                                if trade.get('side') == 'buy' and trade.get('status') in ['closed', 'filled', None]:
-                                    self.entry_price = trade.get('price', current_price)
-                                    logger.info(f"🔄 同步入场价: {base_currency} ${self.entry_price:.6g} (从成交记录)")
-                                    break
-                        except Exception as te:
-                            logger.warning(f"🔄 获取成交记录失败，使用当前价作为入场价: {te}")
-                            self.entry_price = current_price
-                else:
-                    logger.info(f"🔄 持仓已同步: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
+                logger.info(f"🔄 同步持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f}) 账户: {found_in}")
+                self.current_position = total_position
+                
+                # 同步入场价
+                if self.entry_price is None:
+                    try:
+                        trades = self.api.exchange.fetch_my_trades(self.symbol, limit=10)
+                        for trade in reversed(trades):
+                            if trade.get('side') == 'buy':
+                                self.entry_price = trade.get('price', current_price)
+                                logger.info(f"🔄 同步入场价: {base_currency} ${self.entry_price:.6g}")
+                                break
+                    except Exception as te:
+                        logger.warning(f"🔄 获取成交记录失败: {te}")
+                        self.entry_price = current_price
             else:
                 if self.current_position is not None:
-                    logger.info(f"🔄 持仓已清空: {base_currency} 交易所余额为0")
+                    logger.info(f"🔄 持仓已清空: {base_currency}")
                     self.current_position = None
+                    self.entry_price = None
+                    
         except Exception as e:
             logger.error(f"同步持仓失败: {e}")
     
