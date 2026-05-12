@@ -528,10 +528,14 @@ class TelegramNotifier:
             # 简化的交易对名称
             short_name = symbol.replace('/USDT', '')
             
-            # 信号标记（仅在有信号时显示）
+            # 信号标记（仅在有信号且余额足够时显示）
             sig_marker = ''
             if signal == 'buy':
-                sig_marker = ' 🟢买'
+                # 余额不足时不显示买入信号
+                if usdt_balance is not None and usdt_balance < 5:
+                    sig_marker = ' ⚪余额不足'
+                else:
+                    sig_marker = ' 🟢买'
             elif signal == 'sell':
                 sig_marker = ' 🔴卖'
             
@@ -960,16 +964,45 @@ class TradingStrategy:
         
         return False
     
+    def sync_position_from_exchange(self):
+        """
+        从交易所查询实际持仓，同步到 self.current_position
+        解决重启后内存状态丢失的问题
+        """
+        try:
+            # 查询现货余额
+            balance = self.api.get_balance()
+            if not balance:
+                return
+            
+            # 获取基础币种（如 BTC、ETH）
+            base_currency = self.symbol.split('/')[0]
+            
+            # 查询该币种的持仓
+            if base_currency in balance and balance[base_currency]['free'] > 0:
+                actual_position = balance[base_currency]['free']
+                if self.current_position is None:
+                    logger.info(f"🔄 同步持仓: {base_currency} 实际持仓 {actual_position:.6f} (从交易所查询)")
+                    self.current_position = actual_position
+                    # 尝试获取入场价（从最近成交记录）
+                    # 简化：如果无法获取，保持 None
+                else:
+                    logger.info(f"🔄 持仓已同步: {base_currency} {actual_position:.6f}")
+            else:
+                if self.current_position is not None:
+                    logger.warning(f"⚠️ 持仓状态不一致: 内存中有 {self.current_position:.6f}，但交易所查询为空")
+                    # 不自动清空，可能是查询延迟
+        except Exception as e:
+            logger.error(f"同步持仓失败: {e}")
+    
     def run_strategy(self, df: pd.DataFrame) -> Dict:
         """
         运行主策略逻辑（只用方案A - 反转策略/抄底逃顶）
-        
-        核心逻辑：
-        - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
-        - 卖出信号：RSI > 65 (超买) + 价格接近布林带上轨
-        - 适用场景：震荡市（BTC 70%时间在这里）
         """
         try:
+            # 0. 从交易所同步实际持仓（解决重启后状态丢失）
+            self.sync_position_from_exchange()
+            
             # 1. 识别市场状态（用于日志记录和Telegram通知）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
             current_price = df['close'].iloc[-1]
