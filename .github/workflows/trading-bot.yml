@@ -46,4 +46,3 @@ jobs:
         with:
           name: trading-log
           path: trading_bot.log
-          fix: 强制 GitHub Actions 使用最新代码
