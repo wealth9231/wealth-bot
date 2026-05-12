@@ -427,68 +427,31 @@ class TelegramNotifier:
             return False
     
     def notify_trade_signal(self, symbol: str, signal: str, price: float, regime: str) -> bool:
-        """通知交易信号（醒目版本）"""
+        """通知交易信号（简洁版）"""
         short_name = symbol.replace('/USDT', '')
-        time_str = datetime.now().strftime('%H:%M:%S')
+        time_str = datetime.now().strftime('%H:%M')
         
         if signal == 'buy':
-            message = (
-                f"🟢🟢🟢 <b>买入信号触发</b> 🟢🟢🟢\n"
-                f"\n"
-                f"<b>📊 {short_name}</b>  @  <code>${price:,.2f}</code>\n"
-                f"市场状态: {regime}\n"
-                f"\n"
-                f"⏰ <code>{time_str}</code>"
-            )
+            message = f"🟢 买入 {short_name} @ ${price:,.2f}  {time_str}"
         elif signal == 'sell':
-            message = (
-                f"🔴🔴🔴 <b>卖出信号触发</b> 🔴🔴🔴\n"
-                f"\n"
-                f"<b>📊 {short_name}</b>  @  <code>${price:,.2f}</code>\n"
-                f"市场状态: {regime}\n"
-                f"\n"
-                f"⏰ <code>{time_str}</code>"
-            )
+            message = f"🔴 卖出 {short_name} @ ${price:,.2f}  {time_str}"
         else:
-            message = (
-                f"🟡 <b>交易信号</b>\n"
-                f"{short_name}  @  ${price:,.2f}\n"
-                f"信号: {signal.upper()}\n"
-                f"市场状态: {regime}\n"
-                f"⏰ {time_str}"
-            )
+            message = f"🟡 {short_name} @ ${price:,.2f}  信号:{signal.upper()}  {time_str}"
+        
         return self.send_message(message)
     
     def notify_stop_loss(self, symbol: str, entry_price: float, current_price: float, loss_pct: float) -> bool:
-        """通知止损触发（醒目版本）"""
+        """通知止损触发（简洁版）"""
         short_name = symbol.replace('/USDT', '')
-        time_str = datetime.now().strftime('%H:%M:%S')
-        message = (
-            f"🔴🔴🔴 <b>止损触发</b> 🔴🔴🔴\n"
-            f"\n"
-            f"<b>📊 {short_name}</b>\n"
-            f"├ 入场价: <code>${entry_price:,.2f}</code>\n"
-            f"├ 当前价: <code>${current_price:,.2f}</code>\n"
-            f"└ 📉 亏损: <b>{loss_pct*100:.2f}%</b>\n"
-            f"\n"
-            f"⏰ <code>{time_str}</code>"
-        )
+        time_str = datetime.now().strftime('%H:%M')
+        message = f"🔴 止损 {short_name}  入场:${entry_price:,.2f}  当前:${current_price:,.2f}  亏损:{loss_pct*100:.2f}%  {time_str}"
         return self.send_message(message)
     
     def notify_take_profit(self, symbol: str, entry_price: float, current_price: float, profit_pct: float) -> bool:
-        """通知止盈触发（醒目版本）"""
+        """通知止盈触发（简洁版）"""
         short_name = symbol.replace('/USDT', '')
-        time_str = datetime.now().strftime('%H:%M:%S')
-        message = (
-            f"🟢🟢🟢 <b>止盈触发</b> 🟢🟢🟢\n"
-            f"\n"
-            f"<b>📊 {short_name}</b>\n"
-            f"├ 入场价: <code>${entry_price:,.2f}</code>\n"
-            f"├ 当前价: <code>${current_price:,.2f}</code>\n"
-            f"└ 📈 盈利: <b>+{profit_pct*100:.2f}%</b>\n"
-            f"\n"
-            f"⏰ <code>{time_str}</code>"
-        )
+        time_str = datetime.now().strftime('%H:%M')
+        message = f"🟢 止盈 {short_name}  入场:${entry_price:,.2f}  当前:${current_price:,.2f}  盈利:+{profit_pct*100:.2f}%  {time_str}"
         return self.send_message(message)
     
     def notify_error(self, error_msg: str) -> bool:
@@ -529,7 +492,7 @@ class TelegramNotifier:
     
     def notify_market_summary(self, symbols_data: list, usdt_balance: float = None) -> bool:
         """
-        发送市场状态汇总消息（所有交易对合并为1条）
+        发送市场状态汇总消息（简洁版）
         
         symbols_data: 列表，每个元素是字典：
         {
@@ -544,32 +507,15 @@ class TelegramNotifier:
         """
         from config import RSI_OVERSOLD, RSI_OVERBOUGHT
         
-        time_str = datetime.now().strftime('%H:%M:%S')
+        time_str = datetime.now().strftime('%H:%M')
         
-        # 构建汇总消息头部
+        # 简洁的标题
         lines = [
-            f"📊 <b>市场状态监控</b>  <code>{time_str}</code>",
-            "",
+            f"📊 市场监控 {time_str}",
+            "─" * 25,
         ]
         
-        # 统计信息
-        buy_count = sum(1 for d in symbols_data if d.get('signal') == 'buy')
-        sell_count = sum(1 for d in symbols_data if d.get('signal') == 'sell')
-        hold_count = len(symbols_data) - buy_count - sell_count
-        
-        # 添加统计行
-        stats = []
-        if buy_count > 0:
-            stats.append(f"📥 {buy_count}个买入")
-        if sell_count > 0:
-            stats.append(f"📤 {sell_count}个卖出")
-        if hold_count > 0:
-            stats.append(f"⚪ {hold_count}个观望")
-        
-        lines.append(" | ".join(stats))
-        lines.append("")
-        
-        # 添加每个交易对的信息
+        # 添加每个交易对的信息（极简格式）
         for data in symbols_data:
             symbol = data['symbol']
             regime = data.get('regime', 'unknown')
@@ -582,49 +528,32 @@ class TelegramNotifier:
             # 简化的交易对名称
             short_name = symbol.replace('/USDT', '')
             
-            # 市场状态emoji
-            regime_emoji = self._get_regime_emoji(regime)
+            # 信号标记（仅在有信号时显示）
+            sig_marker = ''
+            if signal == 'buy':
+                sig_marker = ' 🟢买'
+            elif signal == 'sell':
+                sig_marker = ' 🔴卖'
             
-            # RSI状态
-            rsi_emoji = '🟢' if rsi < RSI_OVERSOLD else '🔴' if rsi > RSI_OVERBOUGHT else '⚪'
-            rsi_bar = self._get_rsi_bar(rsi, RSI_OVERSOLD, RSI_OVERBOUGHT)
-            
-            # 持仓状态 + 信号合并显示
+            # 持仓状态
             has_position = position and position > 0
-            sig_text = {'buy': '📥 买入', 'sell': '📤 卖出', 'hold': '⚪ 观望'}.get(signal, '⚪ 观望')
-            if has_position:
-                pos_status = f"📦 持仓 {position:.6f}"
-            else:
-                pos_status = f"⭕ 空仓"
+            pos_str = f"持{position:.4f}" if has_position else "空仓"
             
-            # 构建交易对信息（紧凑格式）
+            # RSI状态简单标记
+            rsi_status = '超卖' if rsi < RSI_OVERSOLD else '超买' if rsi > RSI_OVERBOUGHT else '正常'
+            
+            # 极简一行格式
             lines.append(
-                f"<b>{regime_emoji} {short_name}</b>  {regime}\n"
-                f"  ├ {rsi_bar} RSI:{rsi:.1f} {rsi_emoji}\n"
-                f"  ├ 价格: ${price:,.2f} │ ADX:{adx:.1f}\n"
-                f"  ├ {pos_status}\n"
-                f"  └ {sig_text}"
+                f"{short_name:<5} ${price:>8,.2f}  RSI{rsi:.0f}({rsi_status})  {pos_str}{sig_marker}"
             )
         
-        # 添加余额信息
+        # 分隔线 + 余额
+        lines.append("─" * 25)
         if usdt_balance is not None:
-            lines.append("")
-            lines.append(f"💰 <b>USDT余额:</b> ${usdt_balance:.2f}")
-        
-        # 添加策略说明
-        lines.append("")
-        lines.append(f"<i>策略: RSI&lt;{RSI_OVERSOLD}买入 │ RSI&gt;{RSI_OVERBOUGHT}卖出</i>")
+            lines.append(f"USDT: ${usdt_balance:.2f}")
         
         message = "\n".join(lines)
         return self.send_message(message)
-    
-    def _get_rsi_bar(self, rsi: float, oversold: float, overbought: float) -> str:
-        """生成RSI进度条"""
-        # 0-100 映射到 0-10
-        bar_len = 10
-        filled = int(rsi / 100 * bar_len)
-        bar = '█' * filled + '░' * (bar_len - filled)
-        return f"<code>[{bar}]</code>"
     
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
