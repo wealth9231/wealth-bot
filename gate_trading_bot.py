@@ -1111,12 +1111,14 @@ class TradingStrategy:
         """
         根据交易对格式化订单数量（符合交易所精度要求）
         
+        关键：卖出时不能向上取整！只能向下取整，否则会超出可用余额。
+        
         Gate.io 最小订单量：
         - BTC/USDT: 0.000001 BTC
         - ETH/USDT: 0.001 ETH
         - SOL/USDT: 0.001 SOL
         - BNB/USDT: 0.001 BNB
-        - DOGE/USDT: 1 DOGE
+        - DOGE/USDT: 1 DOGE（整数）
         """
         # 定义每个交易对的最小精度（保留小数位）
         precision_map = {
@@ -1124,7 +1126,7 @@ class TradingStrategy:
             'ETH/USDT': 3,   # 0.001
             'SOL/USDT': 3,   # 0.001
             'BNB/USDT': 3,   # 0.001
-            'DOGE/USDT': 0,  # 1
+            'DOGE/USDT': 0,  # 整数（不能小数）
         }
         
         # 定义每个交易对的最小订单量
@@ -1139,8 +1141,15 @@ class TradingStrategy:
         # 获取精度（默认6位）
         precision = precision_map.get(symbol, 6)
         
-        # 四舍五入到指定精度
-        formatted_amount = round(amount, precision)
+        # ✅ 关键修复：向下取整（不能向上！）
+        # 卖出时如果向上取整，会超出可用余额
+        if precision == 0:
+            # 整数精度（如DOGE）：向下取整
+            formatted_amount = int(amount)  # int(51.668) = 51（不是52！）
+        else:
+            # 小数精度：截断到指定小数位（不用round，避免向上取整）
+            multiplier = 10 ** precision
+            formatted_amount = int(amount * multiplier) / multiplier
         
         # 检查是否满足最小订单量
         min_amount = min_amount_map.get(symbol, 0.000001)
