@@ -550,15 +550,20 @@ class TelegramNotifier:
             # 基础行
             line = f"{short_name:<5} ${price_str} RSI{rsi:.0f}{rsi_mark} {trend} {pos_str}"
             
-            # 有持仓：加第二行
-            if has_pos and 'entry_price' in data and data['entry_price']:
+            # 有持仓：加第二行详情
+            if has_pos:
                 pos_count += 1
-                ep = data['entry_price']
-                pnl = (price - ep) / ep * 100
-                tp = ep * (1 + TARGET_PROFIT_PCT)
-                sl = ep * (1 + STOP_LOSS_PCT)
-                sign = '+' if pnl >= 0 else ''
-                line += "\n" + f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
+                ep = data.get('entry_price')
+                if ep:
+                    # 有入场价：显示完整详情
+                    pnl = (price - ep) / ep * 100
+                    tp = ep * (1 + TARGET_PROFIT_PCT)
+                    sl = ep * (1 + STOP_LOSS_PCT)
+                    sign = '+' if pnl >= 0 else ''
+                    line += "\n" + f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
+                else:
+                    # 没有入场价：显示持仓数量和当前价
+                    line += "\n" + f"  持有{position:.4g}个 当前${price:.6g}"
             
             lines.append(line)
         
@@ -1017,6 +1022,18 @@ class TradingStrategy:
                 if self.current_position is None:
                     logger.info(f"🔄 同步持仓: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
                     self.current_position = actual_position
+                    # 尝试从最近成交记录获取入场价
+                    if self.entry_price is None:
+                        try:
+                            trades = self.api.exchange.fetch_my_trades(self.symbol, limit=5)
+                            for trade in reversed(trades):
+                                if trade.get('side') == 'buy' and trade.get('status') in ['closed', 'filled', None]:
+                                    self.entry_price = trade.get('price', current_price)
+                                    logger.info(f"🔄 同步入场价: {base_currency} ${self.entry_price:.6g} (从成交记录)")
+                                    break
+                        except Exception as te:
+                            logger.warning(f"🔄 获取成交记录失败，使用当前价作为入场价: {te}")
+                            self.entry_price = current_price
                 else:
                     logger.info(f"🔄 持仓已同步: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
             else:
