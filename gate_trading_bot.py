@@ -515,7 +515,7 @@ class TelegramNotifier:
         
         # 标题
         lines.append("⚡ WorkBuddy")
-        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}% | RSI<{RSI_OVERSOLD} 买 >{RSI_OVERBOUGHT} 卖")
+        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}% | RSI&lt;{RSI_OVERSOLD} 买 &gt;{RSI_OVERBOUGHT} 卖")
         lines.append("")
         
         # 统计
