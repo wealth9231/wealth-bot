@@ -11,8 +11,15 @@ jobs:
     timeout-minutes: 10  # 每次运行应在几分钟内完成
 
     steps:
-      - name: 检出代码
+      - name: 检出代码（强制最新版本）
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史，避免缓存旧代码
+
+      - name: 显示当前commit（调试用）
+        run: |
+          git log --oneline -1
+          echo "当前commit: $(git rev-parse HEAD)"
 
       - name: 设置Python环境
         uses: actions/setup-python@v5
@@ -39,3 +46,4 @@ jobs:
         with:
           name: trading-log
           path: trading_bot.log
+          fix: 强制 GitHub Actions 使用最新代码
