@@ -1255,6 +1255,76 @@ class TradingStrategy:
         except Exception as e:
             logger.error(f"同步持仓失败: {e}")
     
+    def _place_missing_orders(self, current_price: float, df: pd.DataFrame):
+        """
+        补挂缺失的止盈止损委托单（关键修复）
+        场景：bot重启后有持仓但没有委托单
+        """
+        try:
+            base_currency = self.symbol.split('/')[0]
+            
+            # 获取可用余额（用来挂单）
+            try:
+                balance = self.api.get_balance('spot')
+                if balance and base_currency in balance:
+                    free_amount = balance[base_currency].get('free', 0)
+                    place_amount = self._format_amount(self.symbol, free_amount)
+                    logger.info(f"🔄 补挂委托单: 可用余额={free_amount:.6f}, 挂单数量={place_amount}")
+                else:
+                    place_amount = self._format_amount(self.symbol, self.current_position)
+                    logger.warning(f"🔄 无法获取余额，使用持仓量: {place_amount}")
+            except Exception as be:
+                logger.warning(f"🔄 获取余额失败: {be}, 使用持仓量")
+                place_amount = self._format_amount(self.symbol, self.current_position)
+            
+            if place_amount <= 0:
+                logger.warning(f"🔄 挂单数量为0，跳过补挂")
+                return
+            
+            # 计算动态止盈价格
+            dynamic_tp = self.calculate_dynamic_tp(df) if df is not None else TARGET_PROFIT_PCT
+            tp_price = current_price * (1 + dynamic_tp)
+            sl_price = current_price * (1 + STOP_LOSS_PCT)  # STOP_LOSS_PCT是负数
+            
+            logger.info(f"🔄 补挂委托单: TP={tp_price:.6g} (+{dynamic_tp*100:.1f}%), SL={sl_price:.6g} ({STOP_LOSS_PCT*100:.1f}%)")
+            
+            # 挂止盈限价单
+            if self.tp_order_id is None:
+                try:
+                    # 先取消该交易对的所有挂单（避免重复）
+                    open_orders = self.api.fetch_open_orders(self.symbol)
+                    if open_orders:
+                        logger.info(f"🔄 发现{len(open_orders)}个挂单，先清理...")
+                        for oo in open_orders:
+                            if oo.get('side') == 'sell':
+                                try:
+                                    self.api.cancel_order(self.symbol, oo['id'])
+                                    logger.info(f"✅ 取消旧挂单: ID={oo['id']}")
+                                except Exception as ce:
+                                    logger.warning(f"取消旧挂单失败: {ce}")
+                        import time
+                        time.sleep(1)
+                    
+                    tp_order = self.api.create_limit_sell_order(self.symbol, place_amount, tp_price)
+                    if tp_order and tp_order.get('id'):
+                        self.tp_order_id = tp_order['id']
+                        logger.info(f"✅ 补挂止盈单成功: {place_amount:.6f} @ ${tp_price:.5g} (ID={self.tp_order_id})")
+                except Exception as te:
+                    logger.error(f"❌ 补挂止盈单失败: {te}")
+            
+            # 挂止损条件单
+            if self.sl_order_id is None:
+                try:
+                    sl_order = self.api.create_stop_loss_order(self.symbol, place_amount, sl_price)
+                    if sl_order and sl_order.get('id'):
+                        self.sl_order_id = sl_order['id']
+                        logger.info(f"✅ 补挂止损单成功: {place_amount:.6f} @ ${sl_price:.5g} (ID={self.sl_order_id})")
+                except Exception as se:
+                    logger.error(f"❌ 补挂止损单失败（可能不支持）: {se}")
+                    
+        except Exception as e:
+            logger.error(f"❌ 补挂委托单异常: {e}")
+    
     def run_strategy(self, df: pd.DataFrame) -> Dict:
         """
         运行主策略逻辑（只用方案A - 反转策略/抄底逃顶）
@@ -1263,9 +1333,13 @@ class TradingStrategy:
             # 0. 从交易所同步实际持仓（解决重启后状态丢失）
             self.sync_position_from_exchange()
             
-            # 0.5 检查委托单状态（止盈止损）
+            # 1. 识别市场状态（用于日志记录和Telegram通知）
+            regime, indicators = MarketRegimeDetector.detect_market_regime(df)
+            current_price = df['close'].iloc[-1]
+            
+            # 1.5 检查委托单状态 + 补挂缺失的委托单（止盈止损）
             if self.current_position is not None:
-                # 检查止盈委托单是否成交
+                # 1.5.1 检查止盈委托单
                 if self.tp_order_id:
                     try:
                         tp_order = self.api.fetch_order(self.symbol, self.tp_order_id)
@@ -1287,9 +1361,10 @@ class TradingStrategy:
                             self.tp_order_id = None
                             return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
                     except Exception as e:
-                        logger.warning(f"查询止盈委托单失败: {e}")
+                        logger.warning(f"查询止盈委托单失败: {e}, 将重新挂单")
+                        self.tp_order_id = None  # 清空，准备重新挂单
                 
-                # 检查止损委托单是否成交
+                # 1.5.2 检查止损委托单
                 if self.sl_order_id:
                     try:
                         sl_order = self.api.fetch_order(self.symbol, self.sl_order_id)
@@ -1311,11 +1386,15 @@ class TradingStrategy:
                             self.sl_order_id = None
                             return {'regime': regime, 'signal': 'stop_loss', 'indicators': indicators}
                     except Exception as e:
-                        logger.warning(f"查询止损委托单失败: {e}")
-            
-            # 1. 识别市场状态（用于日志记录和Telegram通知）
-            regime, indicators = MarketRegimeDetector.detect_market_regime(df)
-            current_price = df['close'].iloc[-1]
+                        logger.warning(f"查询止损委托单失败: {e}, 将重新挂单")
+                        self.sl_order_id = None  # 清空，准备重新挂单
+                
+                # 1.5.3 🔧 补挂缺失的委托单（关键修复！）
+                if self.tp_order_id is None or self.sl_order_id is None:
+                    logger.info(f"🔄 检测到缺失委托单，正在补挂... TP_ID={self.tp_order_id}, SL_ID={self.sl_order_id}")
+                    self._place_missing_orders(current_price, df)
+                else:
+                    logger.info(f"✅ 委托单状态正常: TP_ID={self.tp_order_id}, SL_ID={self.sl_order_id}")
             
             # 检测市场状态变化，发送Telegram通知
             if self.notifier and self.last_regime != regime:
