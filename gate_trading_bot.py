@@ -546,22 +546,22 @@ class TelegramNotifier:
             else:
                 rsi_arrow = ' '
             
-            # 价格趋势
+            # 价格趋势（中文：涨/跌/平）
             if '上涨' in regime or 'bull' in regime.lower():
-                trend_emoji = '📈↑'
+                trend_text = '涨'
             elif '下跌' in regime or 'bear' in regime.lower():
-                trend_emoji = '📉↓'
+                trend_text = '跌'
             else:
-                trend_emoji = '📊→'
+                trend_text = '平'
             
-            # 持仓状态
+            # 持仓状态（中文：持/空）
             has_position = position and position > 0
-            pos_emoji = '📂' if has_position else '🔒'
+            pos_text = '持' if has_position else '空'
             
             # 价格格式化（去掉逗号）
             price_str = f"${price:>10,.2f}".replace(',', '')
             
-            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f} {rsi_arrow}  {trend_emoji}  {pos_emoji}")
+            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f}{rsi_arrow} {trend_text} {pos_text}")
         
         # 统计行
         lines.append("")
