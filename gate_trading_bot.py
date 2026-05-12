@@ -512,7 +512,7 @@ class TelegramNotifier:
         
         # 统计
         pos_count = 0
-        MIN_POS_VALUE = 0.5
+        MIN_POS_VALUE = 0.1  # 降低阈值，TRX等小币也能显示
         
         # 每个交易对
         for data in symbols_data:
@@ -555,15 +555,15 @@ class TelegramNotifier:
                 pos_count += 1
                 ep = data.get('entry_price')
                 if ep:
-                    # 有入场价：显示完整详情
+                    # 有入场价：显示完整详情（精简，避免换行）
                     pnl = (price - ep) / ep * 100
                     tp = ep * (1 + TARGET_PROFIT_PCT)
                     sl = ep * (1 + STOP_LOSS_PCT)
                     sign = '+' if pnl >= 0 else ''
-                    line += "\n" + f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
+                    line += "\n" + f"  成本{ep:.5g} 盈亏{sign}{pnl:.1f}% 出{tp:.5g} 砍{sl:.5g}"
                 else:
                     # 没有入场价：显示持仓数量和当前价
-                    line += "\n" + f"  持有{position:.4g}个 当前${price:.6g}"
+                    line += "\n" + f"  持有{position:.4g}个 当前${price:.5g}"
             
             lines.append(line)
         
