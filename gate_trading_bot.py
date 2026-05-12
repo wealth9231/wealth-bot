@@ -492,66 +492,87 @@ class TelegramNotifier:
     
     def notify_market_summary(self, symbols_data: list, usdt_balance: float = None) -> bool:
         """
-        发送市场状态汇总消息（简洁版）
+        发送市场状态汇总消息（新版模板）
         
-        symbols_data: 列表，每个元素是字典：
-        {
-            'symbol': 'BTC/USDT',
-            'regime': '强势下跌',
-            'rsi': 24.36,
-            'adx': 35.12,
-            'price': 80846.4,
-            'position': None,  # 或持仓数量
-            'signal': 'buy'    # buy/sell/hold
-        }
+        模板格式：
+        ⚡ WorkBuddy
+        4x·15m | +2% / -2% | RSI<42 买 >65 卖
+        
+        BTC  $80252  RSI37 ▲  📉↓  🔒
+        ETH  $2264   RSI34 ▲  📉↓  🔒
+        SOL  $94.08   RSI37 ▲  📉↓  🔒
+        BNB  $653.50  RSI27 ▲  📉↓  🔒
+        DOGE $0.11    RSI45 ▼  📊→  📂
+        
+        📊 4信号 · 1持仓   💵 $0.00
+        ⏰ 05-13 16:34
         """
-        from config import RSI_OVERSOLD, RSI_OVERBOUGHT
+        from config import RSI_OVERSOLD, RSI_OVERBOUGHT, TARGET_PROFIT_PCT, STOP_LOSS_PCT, LEVERAGE, TIMEFRAME
         
-        time_str = datetime.now().strftime('%H:%M')
+        time_str = datetime.now().strftime('%m-%d %H:%M')
         
-        # 简洁的标题
-        lines = [
-            f"📊 市场监控 {time_str}",
-            "─" * 25,
-        ]
+        lines = []
         
-        # 添加每个交易对的信息（极简格式）
+        # 标题
+        lines.append("⚡ WorkBuddy")
+        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}% | RSI<{RSI_OVERSOLD} 买 >{RSI_OVERBOUGHT} 卖")
+        lines.append("")
+        
+        # 统计
+        buy_count = sum(1 for d in symbols_data if d.get('signal') == 'buy')
+        sell_count = sum(1 for d in symbols_data if d.get('signal') == 'sell')
+        signal_count = buy_count + sell_count
+        pos_count = sum(1 for d in symbols_data if d.get('position') and d.get('position', 0) > 0)
+        
+        # 每个交易对
         for data in symbols_data:
             symbol = data['symbol']
             regime = data.get('regime', 'unknown')
             rsi = data.get('rsi', 50)
-            adx = data.get('adx', 0)
             price = data.get('price', 0)
             position = data.get('position')
             signal = data.get('signal', 'hold')
             
-            # 简化的交易对名称
             short_name = symbol.replace('/USDT', '')
             
-            # 信号标记（仅在有信号且余额足够时显示）
-            sig_marker = ''
-            if signal == 'buy':
-                # 余额不足时不显示买入信号
-                if usdt_balance is not None and usdt_balance < 5:
-                    sig_marker = ' ⚪余额不足'
-                else:
-                    sig_marker = ' 🟢买'
-            elif signal == 'sell':
-                sig_marker = ' 🔴卖'
+            # RSI箭头：▲超卖 ▼超买
+            if rsi < RSI_OVERSOLD:
+                rsi_arrow = '▲'
+            elif rsi > RSI_OVERBOUGHT:
+                rsi_arrow = '▼'
+            else:
+                rsi_arrow = ' '
+            
+            # 价格趋势
+            if '上涨' in regime or 'bull' in regime.lower():
+                trend_emoji = '📈↑'
+            elif '下跌' in regime or 'bear' in regime.lower():
+                trend_emoji = '📉↓'
+            else:
+                trend_emoji = '📊→'
             
             # 持仓状态
             has_position = position and position > 0
-            pos_str = f"持{position:.4f}" if has_position else "空仓"
+            pos_emoji = '📂' if has_position else '🔒'
             
-            # 极简一行格式
-            lines.append(
-                f"{short_name:<5} ${price:>8,.2f}  RSI{rsi:.0f}  {pos_str}{sig_marker}"
-            )
+            # 价格格式化（去掉逗号）
+            price_str = f"${price:>10,.2f}".replace(',', '')
+            
+            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f} {rsi_arrow}  {trend_emoji}  {pos_emoji}")
         
-        # 分隔线 + 余额
-        lines.append("─" * 25)
-        if usdt_balance is not None:
-            lines.append(f"USDT: ${usdt_balance:.2f}")
+        # 统计行
+        lines.append("")
+        stats_parts = []
+        if signal_count > 0:
+            stats_parts.append(f"{signal_count}信号")
+        if pos_count > 0:
+            stats_parts.append(f"{pos_count}持仓")
+        if not stats_parts:
+            stats_parts.append("0信号")
+        stats_str = " · ".join(stats_parts)
+        balance_str = f"🤖 ${usdt_balance:.2f}" if usdt_balance is not None else "🤖 ?"
+        lines.append(f"📊 {stats_str}   {balance_str}")
+        lines.append(f"⏰ {time_str}")
         
         message = "\n".join(lines)
         return self.send_message(message)
