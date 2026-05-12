@@ -1080,15 +1080,10 @@ class TradingStrategy:
                         logger.warning(f"获取可用余额失败: {be}，使用current_position")
                         sell_amount = self._format_amount(self.symbol, self.current_position)
                     
-                    # 先取消止盈止损委托单ID（如果存在）
-                    if self.tp_order_id:
-                        logger.info(f"卖出前取消止盈委托单: {self.tp_order_id}")
-                        self.api.cancel_order(self.symbol, self.tp_order_id)
-                        self.tp_order_id = None
-                    if self.sl_order_id:
-                        logger.info(f"卖出前取消止损委托单: {self.sl_order_id}")
-                        self.api.cancel_order(self.symbol, self.sl_order_id)
-                        self.sl_order_id = None
+                    # 注意：前面已经撤销了所有挂单，这里不需要重复取消
+                    # 直接清空order_id即可
+                    self.tp_order_id = None
+                    self.sl_order_id = None
                     
                     order = self.api.create_order(self.symbol, 'sell', sell_amount, 'market')
                     if order:
