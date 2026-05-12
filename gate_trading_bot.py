@@ -639,43 +639,49 @@ class TradingStrategy:
     
     def reversal_strategy(self, regime: str, indicators: Dict, df: pd.DataFrame) -> str:
         """
-        反转策略（方案A - 抄底逃顶）
+        反转策略（改进版 - 动态RSI + ADX过滤）
         
-        核心逻辑：
-        - 买入信号：RSI < 35 (超卖) + 价格接近布林带下轨
-        - 卖出信号：RSI > 65 (超买) + 价格接近布林带上轨
-        - 适用场景：震荡市（BTC 70%时间在这里）
+        改进点：
+        1. 动态RSI阈值：布林带宽 > 0.08 时，超卖阈值降到 25（防止趋势中RSI钝化）
+        2. ADX过滤：ADX > 15 时才允许买入（趋势强度足够）
+        3. 更激进的止盈：RSI > 65 就卖出
         
         返回：'buy', 'sell', 'hold'
         """
         rsi = indicators.get('rsi', 50)
         stoch_k = indicators.get('stoch_k', 50)
+        adx = indicators.get('adx', 0)
         current_price = df['close'].iloc[-1]
         
         try:
-            # 计算布林带位置
+            # 计算布林带位置和宽度
             upper, middle, lower = TechnicalIndicators.calculate_bollinger_bands(df)
             bb_position = (current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])  # 0=下轨, 1=上轨
             
+            # 计算布林带宽度（用于动态RSI阈值）
+            bb_width = (upper.iloc[-1] - lower.iloc[-1]) / middle.iloc[-1]
+            
+            # 动态RSI超卖阈值
+            rsi_oversold_current = RSI_OS_WIDE if bb_width > BB_WIDTH_THRESHOLD else RSI_OVERSOLD
+            
             # === 买入信号：抄底 ===
             if self.current_position is None:
-                # 条件1：RSI 超卖 (< 35)
+                # 条件1：RSI 超卖（动态阈值）
                 # 条件2：价格接近布林带下轨 (bb_position < 0.3)
-                # 条件3：Stoch RSI 超卖 (< 20) - 额外确认
-                if rsi < RSI_OVERSOLD and bb_position < 0.3:
-                    logger.info(f"🟢 反转策略买入: RSI={rsi:.1f} < {RSI_OVERSOLD}, 布林带位置={bb_position:.2f} < 0.3")
+                # 条件3：ADX > 15（趋势强度足够）
+                if rsi < rsi_oversold_current and bb_position < 0.3 and adx > TREND_ADX_THRESHOLD:
+                    logger.info(f"🟢 反转策略买入: RSI={rsi:.1f} < {rsi_oversold_current}(动态), 布林带位置={bb_position:.2f} < 0.3, ADX={adx:.1f} > {TREND_ADX_THRESHOLD}")
                     return 'buy'
                 
-                # 特殊情况：RSI 极度超卖 (< 25) + Stoch RSI 极度超卖 (< 15)
-                elif rsi < 25 and stoch_k < 15:
-                    logger.info(f"🟢 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}")
+                # 特殊情况：RSI 极度超卖 (< 25) + Stoch RSI 极度超卖 (< 15) + ADX过滤
+                elif rsi < 25 and stoch_k < 15 and adx > TREND_ADX_THRESHOLD:
+                    logger.info(f"🟢 反转策略买入(极度超卖): RSI={rsi:.1f}, Stoch RSI={stoch_k:.1f}, ADX={adx:.1f}")
                     return 'buy'
             
             # === 卖出信号：逃顶 ===
             elif self.current_position is not None:
                 # 条件1：RSI 超买 (> 65)
                 # 条件2：价格接近布林带上轨 (bb_position > 0.7)
-                # 条件3：Stoch RSI 超买 (> 80) - 额外确认
                 if rsi > RSI_OVERBOUGHT and bb_position > 0.7:
                     logger.info(f"🔴 反转策略卖出: RSI={rsi:.1f} > {RSI_OVERBOUGHT}, 布林带位置={bb_position:.2f} > 0.7")
                     return 'sell'
