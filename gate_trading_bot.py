@@ -1075,6 +1075,11 @@ class TradingStrategy:
                 self.last_regime = regime
             
             # 2. 检查止损（固定止损 + 追踪止损）
+            # 如果有持仓但没有入场价，用当前价作为入场价
+            if self.current_position is not None and self.entry_price is None:
+                self.entry_price = current_price
+                logger.info(f"🔄 无历史入场价，使用当前价作为参考: {self.symbol} @ {current_price:.6g}")
+            
             if self.check_stop_loss(current_price):
                 return {'regime': regime, 'signal': 'stop_loss', 'indicators': indicators}
             
