@@ -564,7 +564,7 @@ class TelegramNotifier:
         if sell_count > 0:
             stats.append(f"📤 {sell_count}个卖出")
         if hold_count > 0:
-            stats.append(f"⏸ {hold_count}个持有")
+            stats.append(f"⚪ {hold_count}个观望")
         
         lines.append(" | ".join(stats))
         lines.append("")
@@ -589,11 +589,13 @@ class TelegramNotifier:
             rsi_emoji = '🟢' if rsi < RSI_OVERSOLD else '🔴' if rsi > RSI_OVERBOUGHT else '⚪'
             rsi_bar = self._get_rsi_bar(rsi, RSI_OVERSOLD, RSI_OVERBOUGHT)
             
-            # 持仓状态
-            pos_status = f"📦 持仓 {position:.6f}" if position else "⭕ 空仓"
-            
-            # 信号
-            sig_emoji = {'buy': '📥 买入', 'sell': '📤 卖出', 'hold': '⏸ 持有'}.get(signal, '⏸ 持有')
+            # 持仓状态 + 信号合并显示
+            has_position = position and position > 0
+            sig_text = {'buy': '📥 买入', 'sell': '📤 卖出', 'hold': '⚪ 观望'}.get(signal, '⚪ 观望')
+            if has_position:
+                pos_status = f"📦 持仓 {position:.6f}"
+            else:
+                pos_status = f"⭕ 空仓"
             
             # 构建交易对信息（紧凑格式）
             lines.append(
@@ -601,7 +603,7 @@ class TelegramNotifier:
                 f"  ├ {rsi_bar} RSI:{rsi:.1f} {rsi_emoji}\n"
                 f"  ├ 价格: ${price:,.2f} │ ADX:{adx:.1f}\n"
                 f"  ├ {pos_status}\n"
-                f"  └ {sig_emoji}"
+                f"  └ {sig_text}"
             )
         
         # 添加余额信息
