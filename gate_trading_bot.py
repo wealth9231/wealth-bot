@@ -493,22 +493,21 @@ class TelegramNotifier:
     def notify_market_summary(self, symbols_data: list, usdt_balance: float = None) -> bool:
         """
         发送市场状态汇总（手机适配精简版）
+        模板：
         Quant Bot
-        杠杆4倍 | 周期15分 | 赚2% 亏2%
+        监控6币 | 目标+2% 止损-2%
         BTC $80552 RSI37▲ 跌 空
         DOGE $0.11 RSI55 平 持
           成本0.1097 现0.112 +2.1%  止盈0.112 止损0.107
-        📊 0信号·1持仓  💵 $0.00
+        📊 机会0个 · 已买入1个  USDT $0.00
         时间 05-13 02:32
         """
-        from config import RSI_OVERSOLD, RSI_OVERBOUGHT, TARGET_PROFIT_PCT, STOP_LOSS_PCT
-        
         time_str = datetime.now().strftime('%m-%d %H:%M')
         lines = []
         
         # 标题
         lines.append("Quant Bot")
-        lines.append(f"杠杆{LEVERAGE}倍 | 周期{TIMEFRAME} | 赚{TARGET_PROFIT_PCT*100:.0f}% 亏{STOP_LOSS_PCT*100:.0f}%")
+        lines.append(f"监控{len(symbols_data)}币 | 目标{TARGET_PROFIT_PCT*100:.0f}% 止损{STOP_LOSS_PCT*100:.0f}%")
         lines.append("")
         
         # 统计
@@ -533,7 +532,7 @@ class TelegramNotifier:
             else:
                 rsi_mark = ' '
             
-            # 趋势
+            # 趋势（1字）
             if '上涨' in regime or 'bull' in regime.lower():
                 trend = '涨'
             elif '下跌' in regime or 'bear' in regime.lower():
@@ -541,7 +540,7 @@ class TelegramNotifier:
             else:
                 trend = '平'
             
-            # 持仓
+            # 持仓？
             has_pos = position and position > 0 and price * position >= MIN_POS_VALUE
             pos_str = '持' if has_pos else '空'
             
@@ -559,22 +558,20 @@ class TelegramNotifier:
                 tp = ep * (1 + TARGET_PROFIT_PCT)
                 sl = ep * (1 + STOP_LOSS_PCT)
                 sign = '+' if pnl >= 0 else ''
-                detail = f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
-                line = line + "\n" + detail
+                line += "\n" + f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
             
             lines.append(line)
         
         # 统计行
         lines.append("")
         signal_count = sum(1 for d in symbols_data if d.get('signal') in ['buy', 'sell'])
-        stats = f"信号{signal_count}个 . 持仓{pos_count}个"
+        stats = f"机会{signal_count}个 · 已买入{pos_count}个"
         balance_str = f"USDT ${usdt_balance:.2f}" if usdt_balance is not None else "USDT ?"
         lines.append(f"📊 {stats}  {balance_str}")
         lines.append(f"时间 {time_str}")
         
         message = "\n".join(lines)
         return self.send_message(message)
-
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
                               entry_price: float = None, current_price: float = None) -> bool:
