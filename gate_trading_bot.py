@@ -730,8 +730,8 @@ class TradingStrategy:
             logger.info(f"当前USDT余额: {usdt_balance:.2f}")
             
             if signal == 'buy':
-                # 正常买入 (使用60%可用资金，更激进)
-                available_usdt = usdt_balance * 0.6
+                # 正常买入 (使用全部可用资金)
+                available_usdt = usdt_balance  # 使用全部余额
                 amount = available_usdt / current_price
                 
                 # 检查最小交易金额（Gate.io最小交易额为5 USDT）
@@ -742,6 +742,10 @@ class TradingStrategy:
                 # 检查最大持仓限制
                 if amount > MAX_POSITION:
                     amount = MAX_POSITION
+                
+                # 根据交易所要求格式化数量精度
+                # Gate.io 最小精度：BTC=0.000001, ETH=0.001, SOL=0.001, BNB=0.001, DOGE=1
+                amount = self._format_amount(self.symbol, amount)
                 
                 if amount > 0:
                     logger.info(f"执行买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
@@ -765,10 +769,16 @@ class TradingStrategy:
                     logger.warning(f"可用资金不足5 USDT，跳过买入")
                     return
                 
+                # 根据交易所要求格式化数量精度
+                amount = self._format_amount(self.symbol, amount)
+                
                 if amount > MAX_POSITION * 0.5:
                     amount = MAX_POSITION * 0.5
                 
                 if amount > 0:
+                    # 根据交易所要求格式化数量精度
+                    amount = self._format_amount(self.symbol, amount)
+                    
                     logger.info(f"执行小仓位买入: {amount:.6f} {self.symbol} @ {current_price:.2f}")
                     order = self.api.create_order(self.symbol, 'buy', amount, 'market')
                     if order:
@@ -787,7 +797,10 @@ class TradingStrategy:
                     profit_pct = (current_price - self.entry_price) / self.entry_price * 100
                     logger.info(f"执行卖出: {self.current_position:.6f} {self.symbol} @ {current_price:.2f}, 盈亏: {profit_pct:.2f}%")
                     
-                    order = self.api.create_order(self.symbol, 'sell', self.current_position, 'market')
+                    # 格式化卖出数量
+                    sell_amount = self._format_amount(self.symbol, self.current_position)
+                    
+                    order = self.api.create_order(self.symbol, 'sell', sell_amount, 'market')
                     if order:
                         logger.info(f"✅ 卖出成功: 盈亏={profit_pct:.2f}%")
                         
@@ -803,6 +816,49 @@ class TradingStrategy:
             logger.error(f"执行交易信号失败: {e}")
             if self.notifier:
                 self.notifier.notify_error(f"执行交易信号失败: {e}")
+    
+    def _format_amount(self, symbol: str, amount: float) -> float:
+        """
+        根据交易对格式化订单数量（符合交易所精度要求）
+        
+        Gate.io 最小订单量：
+        - BTC/USDT: 0.000001 BTC
+        - ETH/USDT: 0.001 ETH
+        - SOL/USDT: 0.001 SOL
+        - BNB/USDT: 0.001 BNB
+        - DOGE/USDT: 1 DOGE
+        """
+        # 定义每个交易对的最小精度（保留小数位）
+        precision_map = {
+            'BTC/USDT': 6,   # 0.000001
+            'ETH/USDT': 3,   # 0.001
+            'SOL/USDT': 3,   # 0.001
+            'BNB/USDT': 3,   # 0.001
+            'DOGE/USDT': 0,  # 1
+        }
+        
+        # 定义每个交易对的最小订单量
+        min_amount_map = {
+            'BTC/USDT': 0.000001,
+            'ETH/USDT': 0.001,
+            'SOL/USDT': 0.001,
+            'BNB/USDT': 0.001,
+            'DOGE/USDT': 1.0,
+        }
+        
+        # 获取精度（默认6位）
+        precision = precision_map.get(symbol, 6)
+        
+        # 四舍五入到指定精度
+        formatted_amount = round(amount, precision)
+        
+        # 检查是否满足最小订单量
+        min_amount = min_amount_map.get(symbol, 0.000001)
+        if formatted_amount < min_amount:
+            logger.warning(f"订单数量 {formatted_amount} 小于最小要求 {min_amount}，设置为0")
+            return 0
+        
+        return formatted_amount
     
     def check_stop_loss(self, current_price: float) -> bool:
         """检查止损条件（包含追踪止损）"""
