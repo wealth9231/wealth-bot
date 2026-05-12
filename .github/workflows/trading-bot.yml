@@ -11,18 +11,18 @@ jobs:
     timeout-minutes: 10  # 每次运行应在几分钟内完成
 
     steps:
-      - name: 强制清理缓存（确保使用最新代码）
-        run: |
-          echo "清理Git缓存和工作目录..."
-          git gc --prune=now || true
-          rm -rf .git/objects/info/commit-graph || true
-          echo "清理完成"
-
       - name: 检出代码（强制最新版本）
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 获取完整历史，避免缓存旧代码
           clean: true      # 强制清理工作目录
+
+      - name: 强制清理Git缓存（确保使用最新代码）
+        run: |
+          echo "清理Git缓存..."
+          git gc --prune=now || true
+          rm -rf .git/objects/info/commit-graph || true
+          echo "清理完成"
 
       - name: 显示当前commit（调试用）
         run: |

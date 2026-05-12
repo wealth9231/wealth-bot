@@ -25,10 +25,10 @@ GRID_NUM = 20                # 网格数量 (增加网格密度)
 GRID_PRICE_RANGE = 0.03     # 网格价格范围 (±3%，扩大网格范围)
 
 # ==================== 策略参数 ====================
-TREND_ADX_THRESHOLD = 20    # ADX趋势判断阈值 (降低阈值，增加趋势识别)
-RSI_OVERSOLD = 35           # RSI超卖阈值 (适中，增加开仓机会)
-RSI_OVERBOUGHT = 65         # RSI超买阈值 (放宽超买条件)
-BB_WIDTH_THRESHOLD = 0.03   # 布林带宽度阈值 (降低阈值，更多震荡市交易机会)
+TREND_ADX_THRESHOLD = 15    # ADX趋势判断阈值 (降低阈值，识别更多趋势)
+RSI_OVERSOLD = 42           # RSI超卖阈值 (提高阈值，增加开仓机会)
+RSI_OVERBOUGHT = 70         # RSI超买阈值 (提高阈值，让持仓更久)
+BB_WIDTH_THRESHOLD = 0.02   # 布林带宽度阈值 (降低阈值，更多震荡市交易机会)
 
 # ==================== Telegram通知配置 ====================
 # 注意：GitHub Actions 使用 GitHub Secrets 中的配置，这里只是默认值
