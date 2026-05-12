@@ -561,7 +561,18 @@ class TelegramNotifier:
             # 价格格式化（去掉逗号）
             price_str = f"${price:>10,.2f}".replace(',', '')
             
-            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f}{rsi_arrow} {trend_text} {pos_text}")
+            # 持仓详情（有持仓时显示：均价、盈亏、止盈止损）
+            pos_detail = ''
+            if has_position and 'entry_price' in data and data['entry_price']:
+                ep = data['entry_price']
+                pnl_pct = (price - ep) / ep * 100
+                tp_price = ep * (1 + TARGET_PROFIT_PCT)
+                sl_price = ep * (1 + STOP_LOSS_PCT)
+                pnl_emoji = '📈' if pnl_pct >= 0 else '📉'
+                pnl_sign = '+' if pnl_pct >= 0 else ''
+                pos_detail = f"\n    └ 均价${ep:.6g} 现${price:.6g} {pnl_emoji}{pnl_sign}{pnl_pct:.1f}%  止盈${tp_price:.6g} 止损${sl_price:.6g}"
+            
+            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f}{rsi_arrow} {trend_text} {pos_text}{pos_detail}")
         
         # 统计行
         lines.append("")
@@ -1228,6 +1239,7 @@ def main():
                     'adx': indicators.get('adx', 0),
                     'price': current_price,
                     'position': result.get('position'),
+                    'entry_price': result.get('entry_price'),  # 新增：开仓均价
                     'signal': result.get('signal', 'hold')
                 })
                 
