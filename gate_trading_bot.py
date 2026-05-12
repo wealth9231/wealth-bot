@@ -674,6 +674,7 @@ class TradingStrategy:
         self.last_regime = None
         self.tp_order_id = None   # 止盈委托单ID
         self.sl_order_id = None   # 止损委托单ID
+        self._force_sell_micro_position = False  # 标记是否需要强制卖出微小持仓
         
     def trend_following_strategy(self, regime: str, current_price: float, indicators: Dict) -> str:
         """
@@ -1203,21 +1204,18 @@ class TradingStrategy:
         - 只查 spot 账户（funding账户无法直接卖出，需手动转账）
         - free = 可用余额（可立即卖出）
         - total = free + used（used是挂单中冻结的）
-        - ccxt 返回的 balance 中，'free' 是真正可用的
         """
         try:
-            MIN_POSITION_VALUE = 0.1  # 最小持仓价值（美元）
+            MIN_POSITION_VALUE = 0.01  # 最小持仓价值（美元），降低阈值让微小持仓也能卖出
             base_currency = self.symbol.split('/')[0]
             
-            # ✅ 只查 spot 账户（funding账户的币无法直接卖出）
+            # ✅ 只查 spot 账户
             try:
                 balance = self.api.get_balance('spot')
                 if balance and base_currency in balance:
-                    # ✅ 只用 free（可用余额），不要用 total 或 free+used
-                    # 因为 used 是挂单冻结的，已经包含在 total 里了
                     free_amount = balance[base_currency].get('free', 0)
                     used_amount = balance[base_currency].get('used', 0)
-                    total_position = free_amount + used_amount  # total = 可用 + 冻结
+                    total_position = free_amount + used_amount
                     
                     logger.info(f"🔄 {base_currency} 余额: 可用={free_amount:.6f}, 冻结={used_amount:.6f}, 总计={total_position:.6f}")
                 else:
@@ -1232,14 +1230,11 @@ class TradingStrategy:
                 current_price = ticker['last']
                 position_value = total_position * current_price
             except Exception:
+                current_price = 0
                 position_value = float('inf')
             
             # 更新持仓状态
             if total_position > 0:
-                if position_value < MIN_POSITION_VALUE:
-                    logger.info(f"🔄 忽略极小持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
-                    return
-                
                 logger.info(f"🔄 同步持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
                 self.current_position = total_position
                 
@@ -1255,10 +1250,14 @@ class TradingStrategy:
                     except Exception as te:
                         logger.warning(f"🔄 获取成交记录失败: {te}")
                         self.entry_price = current_price
+                
+                # 标记微小持仓（后续run_strategy中会强制卖出）
+                if 0 < position_value < MIN_POSITION_VALUE:
+                    logger.info(f"🔄 标记微小持仓待清理: {self.symbol} (价值 ${position_value:.2f})")
+                    self._force_sell_micro_position = True
             else:
                 if self.current_position is not None:
                     logger.info(f"🔄 持仓已清空: {base_currency}")
-                    # 清空委托单ID
                     self.tp_order_id = None
                     self.sl_order_id = None
                     self.current_position = None
@@ -1344,6 +1343,19 @@ class TradingStrategy:
         try:
             # 0. 从交易所同步实际持仓（解决重启后状态丢失）
             self.sync_position_from_exchange()
+            
+            # 0.5 强制卖出微小持仓（方案A：降低阈值后，微小持仓也要清理）
+            if self._force_sell_micro_position:
+                logger.info(f"🔄 强制清理微小持仓: {self.symbol}")
+                self._force_sell_micro_position = False  # 重置标志
+                # 获取当前价格并卖出
+                try:
+                    ticker = self.api.exchange.fetch_ticker(self.symbol)
+                    current_price = ticker['last']
+                    self.execute_signal('sell', current_price, df)
+                    return {'regime': 'unknown', 'signal': 'force_sell', 'indicators': {}}
+                except Exception as e:
+                    logger.error(f"强制清理微小持仓失败: {e}")
             
             # 1. 识别市场状态（用于日志记录和Telegram通知）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
