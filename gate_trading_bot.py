@@ -1040,27 +1040,14 @@ class TradingStrategy:
                         logger.info(f"✅ 止损委托单已挂: {filled_amount:.6f} @ ${sl_price:.5g} (ID={self.sl_order_id})")
                         
             elif signal == 'sell':
-                # 卖出全部持仓
+                # 卖出全部持仓（只卖spot账户的可用余额）
                 if self.current_position and self.current_position > 0:
                     profit_pct = (current_price - self.entry_price) / self.entry_price * 100
                     logger.info(f"执行卖出: {self.current_position:.6f} {self.symbol} @ {current_price:.2f}, 盈亏: {profit_pct:.2f}%")
                     
-                    # 格式化卖出数量
+                    # 格式化卖出数量（使用self.current_position，即spot账户的可用余额）
                     sell_amount = self._format_amount(self.symbol, self.current_position)
-                    
-                    # 🔄 先转账：如果funding账户有余额，转到spot账户（才能卖出）
-                    base_currency = self.symbol.split('/')[0]
-                    try:
-                        funding_balance = self.api.get_balance('funding')
-                        if funding_balance and base_currency in funding_balance:
-                            funding_amount = funding_balance[base_currency].get('free', 0)
-                            if funding_amount > 0:
-                                logger.info(f"🔄 发现{funding_amount:.6f} {base_currency}在funding账户，转到spot账户...")
-                                self.api.exchange.transfer(base_currency, funding_amount, 'funding', 'spot')
-                                logger.info(f"✅ 转账成功: {funding_amount:.6f} {base_currency} funding→spot")
-                                time.sleep(2)  # 等待转账完成
-                    except Exception as te:
-                        logger.warning(f"转账失败（可能不支持）: {te}")
+                    logger.info(f"卖出数量（格式化后）: {sell_amount}")
                     
                     # 先取消止盈止损委托单
                     if self.tp_order_id:
@@ -1157,30 +1144,35 @@ class TradingStrategy:
     
     def sync_position_from_exchange(self):
         """
-        从交易所查询实际持仓（所有账户类型），同步到 self.current_position
+        从交易所查询实际持仓（仅spot账户），同步到 self.current_position
         解决重启后内存状态丢失的问题
+        
+        注意：
+        - 只查 spot 账户（funding账户无法直接卖出，需手动转账）
+        - free = 可用余额（可立即卖出）
+        - total = free + used（used是挂单中冻结的）
+        - ccxt 返回的 balance 中，'free' 是真正可用的
         """
         try:
             MIN_POSITION_VALUE = 0.1  # 最小持仓价值（美元）
             base_currency = self.symbol.split('/')[0]
             
-            # 查询所有账户类型
-            account_types = ['spot', 'funding', 'future']  # 移除margin（ccxt不支持）
-            total_position = 0
-            found_in = []
-            
-            for acc_type in account_types:
-                try:
-                    balance = self.api.get_balance(acc_type)
-                    if balance and base_currency in balance:
-                        amount = balance[base_currency].get('free', 0) + balance[base_currency].get('used', 0)
-                        if amount > 0:
-                            total_position += amount
-                            found_in.append(acc_type)
-                            logger.info(f"🔄 发现持仓: {base_currency} {amount:.6f} 在 {acc_type} 账户")
-                except Exception as e:
-                    logger.debug(f"查询 {acc_type} 账户失败: {e}")
-                    continue
+            # ✅ 只查 spot 账户（funding账户的币无法直接卖出）
+            try:
+                balance = self.api.get_balance('spot')
+                if balance and base_currency in balance:
+                    # ✅ 只用 free（可用余额），不要用 total 或 free+used
+                    # 因为 used 是挂单冻结的，已经包含在 total 里了
+                    free_amount = balance[base_currency].get('free', 0)
+                    used_amount = balance[base_currency].get('used', 0)
+                    total_position = free_amount + used_amount  # total = 可用 + 冻结
+                    
+                    logger.info(f"🔄 {base_currency} 余额: 可用={free_amount:.6f}, 冻结={used_amount:.6f}, 总计={total_position:.6f}")
+                else:
+                    total_position = 0
+            except Exception as e:
+                logger.error(f"🔄 查询spot账户失败: {e}")
+                return
             
             # 获取当前价格计算价值
             try:
@@ -1196,18 +1188,18 @@ class TradingStrategy:
                     logger.info(f"🔄 忽略极小持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
                     return
                 
-                logger.info(f"🔄 同步持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f}) 账户: {found_in}")
+                logger.info(f"🔄 同步持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
                 self.current_position = total_position
                 
                 # 同步入场价
                 if self.entry_price is None:
                     try:
-                        trades = self.api.exchange.fetch_my_trades(self.symbol, limit=10)
-                        for trade in reversed(trades):
-                            if trade.get('side') == 'buy':
-                                self.entry_price = trade.get('price', current_price)
-                                logger.info(f"🔄 同步入场价: {base_currency} ${self.entry_price:.6g}")
-                                break
+                            trades = self.api.exchange.fetch_my_trades(self.symbol, limit=10)
+                            for trade in reversed(trades):
+                                if trade.get('side') == 'buy':
+                                    self.entry_price = trade.get('price', current_price)
+                                    logger.info(f"🔄 同步入场价: {base_currency} ${self.entry_price:.6g}")
+                                    break
                     except Exception as te:
                         logger.warning(f"🔄 获取成交记录失败: {te}")
                         self.entry_price = current_price
