@@ -1137,20 +1137,14 @@ def main():
         notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED)
         logger.info("Telegram通知器初始化成功")
         
-        # 发送启动通知（新版：紧凑美观）
+        # 发送启动通知（极简版）
         logger.info("发送启动通知...")
         short_symbols = [s.replace('/USDT', '') for s in SYMBOLS]
         startup_msg = (
-            f"🚀 <b>Gate.io 交易机器人启动</b>\n"
-            f"\n"
-            f"<b>⚙️ 配置参数</b>\n"
-            f"├ 交易对: {' '.join(short_symbols)}\n"
-            f"├ 杠杆: {LEVERAGE}x │ 周期: {TIMEFRAME}\n"
-            f"├ 目标: {TARGET_PROFIT_PCT*100:.1f}% │ 止损: {STOP_LOSS_PCT*100:.1f}%\n"
-            f"├ 买入: RSI&lt;{RSI_OVERSOLD} │ 卖出: RSI&gt;{RSI_OVERBOUGHT}\n"
-            f"└ ADX门槛: {TREND_ADX_THRESHOLD} │ 最小盈亏比: {MIN_RR_RATIO}\n"
-            f"\n"
-            f"⏰ <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            f"⚡ WorkBuddy 已启动\n"
+            f"{LEVERAGE}x·{TIMEFRAME} | {len(short_symbols)}币种 | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}%\n"
+            f"{' '.join(short_symbols)}\n"
+            f"⏰ {datetime.now().strftime('%m-%d %H:%M')}"
         )
         notifier.send_message(startup_msg)
     
