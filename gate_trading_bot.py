@@ -539,12 +539,9 @@ class TelegramNotifier:
             has_position = position and position > 0
             pos_str = f"持{position:.4f}" if has_position else "空仓"
             
-            # RSI状态简单标记
-            rsi_status = '超卖' if rsi < RSI_OVERSOLD else '超买' if rsi > RSI_OVERBOUGHT else '正常'
-            
             # 极简一行格式
             lines.append(
-                f"{short_name:<5} ${price:>8,.2f}  RSI{rsi:.0f}({rsi_status})  {pos_str}{sig_marker}"
+                f"{short_name:<5} ${price:>8,.2f}  RSI{rsi:.0f}  {pos_str}{sig_marker}"
             )
         
         # 分隔线 + 余额
