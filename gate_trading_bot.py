@@ -518,11 +518,14 @@ class TelegramNotifier:
         lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}% | RSI&lt;{RSI_OVERSOLD} 买 &gt;{RSI_OVERBOUGHT} 卖")
         lines.append("")
         
-        # 统计
+        # 统计（过滤极小持仓，价值<$0.5不统计）
+        MIN_POS_VALUE = 0.5
         buy_count = sum(1 for d in symbols_data if d.get('signal') == 'buy')
         sell_count = sum(1 for d in symbols_data if d.get('signal') == 'sell')
         signal_count = buy_count + sell_count
-        pos_count = sum(1 for d in symbols_data if d.get('position') and d.get('position', 0) > 0)
+        pos_count = sum(1 for d in symbols_data 
+                       if d.get('position') and d.get('position', 0) > 0 
+                       and d.get('position', 0) * d.get('price', 0) >= MIN_POS_VALUE)
         
         # 每个交易对
         for data in symbols_data:
@@ -989,8 +992,11 @@ class TradingStrategy:
         """
         从交易所查询实际持仓，同步到 self.current_position
         解决重启后内存状态丢失的问题
+        过滤极小余额（<$0.5），避免残留/空投被误识别为持仓
         """
         try:
+            MIN_POSITION_VALUE = 0.5  # 最小持仓价值（美元），低于此值忽略
+            
             # 查询现货余额
             balance = self.api.get_balance()
             if not balance:
@@ -1002,17 +1008,29 @@ class TradingStrategy:
             # 查询该币种的持仓
             if base_currency in balance and balance[base_currency]['free'] > 0:
                 actual_position = balance[base_currency]['free']
+                
+                # 获取当前价格，计算持仓价值
+                try:
+                    ticker = self.api.exchange.fetch_ticker(self.symbol)
+                    current_price = ticker['last']
+                    position_value = actual_position * current_price
+                except Exception:
+                    position_value = float('inf')  # 无法获取价格时，不过滤
+                
+                # 过滤极小持仓
+                if position_value < MIN_POSITION_VALUE:
+                    logger.info(f"🔄 忽略极小持仓: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f} < ${MIN_POSITION_VALUE})")
+                    return
+                
                 if self.current_position is None:
-                    logger.info(f"🔄 同步持仓: {base_currency} 实际持仓 {actual_position:.6f} (从交易所查询)")
+                    logger.info(f"🔄 同步持仓: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
                     self.current_position = actual_position
-                    # 尝试获取入场价（从最近成交记录）
-                    # 简化：如果无法获取，保持 None
                 else:
-                    logger.info(f"🔄 持仓已同步: {base_currency} {actual_position:.6f}")
+                    logger.info(f"🔄 持仓已同步: {base_currency} {actual_position:.6f} (价值 ${position_value:.2f})")
             else:
                 if self.current_position is not None:
-                    logger.warning(f"⚠️ 持仓状态不一致: 内存中有 {self.current_position:.6f}，但交易所查询为空")
-                    # 不自动清空，可能是查询延迟
+                    logger.info(f"🔄 持仓已清空: {base_currency} 交易所余额为0")
+                    self.current_position = None
         except Exception as e:
             logger.error(f"同步持仓失败: {e}")
     
