@@ -1247,8 +1247,8 @@ class TradingStrategy:
                 current_price = 0
                 position_value = float('inf')
             
-            # 更新持仓状态
-            if total_position > 0:
+            # 更新持仓状态（用1e-8避免浮点精度问题）
+            if total_position > 1e-8:
                 logger.info(f"🔄 同步持仓: {base_currency} {total_position:.6f} (价值 ${position_value:.2f})")
                 self.current_position = total_position
                 
@@ -1362,14 +1362,34 @@ class TradingStrategy:
             if self._force_sell_micro_position:
                 logger.info(f"🔄 强制清理微小持仓: {self.symbol}")
                 self._force_sell_micro_position = False  # 重置标志
-                # 获取当前价格并卖出
+                # 获取可用余额，检查是否可以卖出
                 try:
+                    balance = self.api.get_balance('spot')
+                    base_currency = self.symbol.split('/')[0]
+                    if balance and base_currency in balance:
+                        free_amount = balance[base_currency].get('free', 0)
+                        sell_amount = self._format_amount(self.symbol, free_amount)
+                        if sell_amount <= 0:
+                            logger.warning(f"🔄 微小持仓无法卖出(数量={sell_amount}), 直接清空状态: {self.symbol}")
+                            self.current_position = None
+                            self.entry_price = None
+                            self.entry_time = None
+                            self.highest_price = None
+                            return {'regime': 'unknown', 'signal': 'force_sell_skip', 'indicators': {}}
+                    
+                    # 获取当前价格并卖出
                     ticker = self.api.exchange.fetch_ticker(self.symbol)
                     current_price = ticker['last']
+                    if self.entry_price is None:
+                        self.entry_price = current_price
                     self.execute_signal('sell', current_price, df)
                     return {'regime': 'unknown', 'signal': 'force_sell', 'indicators': {}}
                 except Exception as e:
                     logger.error(f"强制清理微小持仓失败: {e}")
+                    # 如果失败，也清空状态（避免一直卡住）
+                    self.current_position = None
+                    self.entry_price = None
+                    return {'regime': 'unknown', 'signal': 'force_sell_error', 'indicators': {}}
             
             # 1. 识别市场状态（用于日志记录和Telegram通知）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
