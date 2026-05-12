@@ -113,6 +113,10 @@ class ExchangeAPI:
             # 格式：BTC/USDT → 现货；BTC/USDT:USDT → 杠杆
             is_margin = ':' in symbol
             
+            # 🔍 调试：打印订单参数
+            logger.info(f"创建订单: symbol={symbol}, side={side}, amount={amount:.10f}, order_type={order_type}, price={price}")
+            logger.info(f"amount类型: {type(amount)}, 格式化后: {amount}")
+            
             params = {}
             if is_margin:
                 params = {
@@ -120,15 +124,18 @@ class ExchangeAPI:
                     'leverage': LEVERAGE,
                 }
             
+            # 使用 CCXT 标准 create_order 方法
+            # 签名: create_order(symbol, type, side, amount, price=None, params={})
             if order_type == 'market':
-                order = self.exchange.create_market_order(symbol, side, amount, params)
+                order = self.exchange.create_order(symbol, 'market', side, amount, None, params)
             else:
-                order = self.exchange.create_limit_order(symbol, side, amount, price, params)
+                order = self.exchange.create_order(symbol, 'limit', side, amount, price, params)
             
             logger.info(f"订单创建成功: {side} {amount} {symbol} @ {price if price else 'market'}")
+            logger.info(f"订单详情: {order}")
             return order
         except Exception as e:
-            logger.error(f"创建订单失败: {e}")
+            logger.error(f"创建订单失败: symbol={symbol}, side={side}, amount={amount}, error={e}")
             return {}
     
     def get_position(self, symbol: str) -> Dict:
