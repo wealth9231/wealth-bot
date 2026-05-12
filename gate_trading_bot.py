@@ -1045,11 +1045,42 @@ class TradingStrategy:
                     profit_pct = (current_price - self.entry_price) / self.entry_price * 100
                     logger.info(f"执行卖出: {self.current_position:.6f} {self.symbol} @ {current_price:.2f}, 盈亏: {profit_pct:.2f}%")
                     
-                    # 格式化卖出数量（使用self.current_position，即spot账户的可用余额）
-                    sell_amount = self._format_amount(self.symbol, self.current_position)
-                    logger.info(f"卖出数量（格式化后）: {sell_amount}")
+                    # 🔧 关键修复1：卖出前先撤销该交易对的所有挂单（释放冻结）
+                    try:
+                        open_orders = self.api.exchange.fetch_open_orders(self.symbol)
+                        if open_orders:
+                            logger.info(f"🔄 发现{len(open_orders)}个挂单，先撤销再卖出...")
+                            for oo in open_orders:
+                                try:
+                                    self.api.exchange.cancel_order(oo['id'], self.symbol)
+                                    logger.info(f"✅ 撤销挂单: ID={oo['id']}, {oo['side']} {oo['amount']} @ {oo.get('price', 'market')}")
+                                except Exception as ce:
+                                    logger.warning(f"撤销挂单失败 {oo['id']}: {ce}")
+                            import time
+                            time.sleep(2)  # 等待冻结释放
+                            # 重新同步持仓（冻结释放后，可用余额会更新）
+                            self.sync_position_from_exchange()
+                            logger.info(f"🔄 重新同步后持仓: {self.current_position:.6f}")
+                    except Exception as fe:
+                        logger.warning(f"查询挂单失败（可能不支持）: {fe}")
                     
-                    # 先取消止盈止损委托单
+                    # 🔧 关键修复2：卖出时用"可用余额"，不用total（可能包含冻结）
+                    try:
+                        balance = self.api.get_balance('spot')
+                        base_currency = self.symbol.split('/')[0]
+                        if balance and base_currency in balance:
+                            free_amount = balance[base_currency].get('free', 0)
+                            sell_amount = self._format_amount(self.symbol, free_amount)
+                            logger.info(f"卖出数量（可用余额）: {sell_amount} (free={free_amount:.6f})")
+                        else:
+                            # fallback到self.current_position
+                            sell_amount = self._format_amount(self.symbol, self.current_position)
+                            logger.warning(f"无法获取可用余额，使用current_position: {sell_amount}")
+                    except Exception as be:
+                        logger.warning(f"获取可用余额失败: {be}，使用current_position")
+                        sell_amount = self._format_amount(self.symbol, self.current_position)
+                    
+                    # 先取消止盈止损委托单ID（如果存在）
                     if self.tp_order_id:
                         logger.info(f"卖出前取消止盈委托单: {self.tp_order_id}")
                         self.api.cancel_order(self.symbol, self.tp_order_id)
