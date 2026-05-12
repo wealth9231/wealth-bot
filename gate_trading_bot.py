@@ -90,13 +90,19 @@ class ExchangeAPI:
             logger.error(f"获取K线数据失败: {e}")
             return pd.DataFrame()
     
-    def get_balance(self) -> Dict:
-        """获取账户余额（包含保证金余额）"""
+    def get_balance(self, market_type: str = 'spot') -> Dict:
+        """
+        获取账户余额
+        
+        Args:
+            market_type: 市场类型 ('spot', 'margin', 'swap', etc.)
+                       默认 'spot' (现货)，因为主要做现货交易
+        """
         try:
-            balance = self.exchange.fetch_balance()
+            balance = self.exchange.fetch_balance({'type': market_type})
             return balance
         except Exception as e:
-            logger.error(f"获取余额失败: {e}")
+            logger.error(f"获取余额失败 (market_type={market_type}): {e}")
             return {}
     
     def create_order(self, symbol: str, side: str, amount: float, 
@@ -126,9 +132,9 @@ class ExchangeAPI:
             return {}
     
     def get_position(self, symbol: str) -> Dict:
-        """获取持仓信息（杠杆交易）"""
+        """获取持仓信息（现货/杠杆通用）"""
         try:
-            balance = self.get_balance()
+            balance = self.get_balance('spot')  # 获取现货余额
             base_currency = symbol.split('/')[0]
             quote_currency = symbol.split('/')[1]
             
@@ -714,8 +720,8 @@ class TradingStrategy:
     def execute_signal(self, signal: str, current_price: float):
         """执行交易信号（优化版 - 增加详细日志）"""
         try:
-            # 检查资金余额
-            balance = self.api.get_balance()
+            # 检查资金余额（获取现货余额）
+            balance = self.api.get_balance('spot')
             if not balance or 'USDT' not in balance:
                 logger.error("无法获取USDT余额，跳过交易")
                 return
