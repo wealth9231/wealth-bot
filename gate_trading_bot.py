@@ -492,105 +492,88 @@ class TelegramNotifier:
     
     def notify_market_summary(self, symbols_data: list, usdt_balance: float = None) -> bool:
         """
-        发送市场状态汇总消息（新版模板）
-        
-        模板格式：
-        ⚡ WorkBuddy
-        4x·15m | +2% / -2% | RSI<42 买 >65 卖
-        
-        BTC  $80252  RSI37 ▲  📉↓  🔒
-        ETH  $2264   RSI34 ▲  📉↓  🔒
-        SOL  $94.08   RSI37 ▲  📉↓  🔒
-        BNB  $653.50  RSI27 ▲  📉↓  🔒
-        DOGE $0.11    RSI45 ▼  📊→  📂
-        
-        📊 4信号 · 1持仓   💵 $0.00
-        ⏰ 05-13 16:34
+        发送市场状态汇总（手机适配精简版）
+        Quant Bot
+        4x·15m | +2% / -2%
+        BTC 80552 50 涨 空
+        DOGE 0.11 55 涨 持
+          均价0.1097 现0.112 +2.1% TP0.112 SL0.107
+        📊 0信号·1持仓 💵 $0.00
+        ⏰ 05-13 02:32
         """
-        from config import RSI_OVERSOLD, RSI_OVERBOUGHT, TARGET_PROFIT_PCT, STOP_LOSS_PCT, LEVERAGE, TIMEFRAME
+        from config import RSI_OVERSOLD, RSI_OVERBOUGHT, TARGET_PROFIT_PCT, STOP_LOSS_PCT
         
         time_str = datetime.now().strftime('%m-%d %H:%M')
-        
         lines = []
         
-        # 标题
-        lines.append("⚡ WorkBuddy")
-        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}% | RSI&lt;{RSI_OVERSOLD} 买 &gt;{RSI_OVERBOUGHT} 卖")
+        # 标题（一行）
+        lines.append("Quant Bot")
+        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}%")
         lines.append("")
         
-        # 统计（过滤极小持仓，价值<$0.5不统计）
+        # 统计
+        pos_count = 0
         MIN_POS_VALUE = 0.5
-        buy_count = sum(1 for d in symbols_data if d.get('signal') == 'buy')
-        sell_count = sum(1 for d in symbols_data if d.get('signal') == 'sell')
-        signal_count = buy_count + sell_count
-        pos_count = sum(1 for d in symbols_data 
-                       if d.get('position') and d.get('position', 0) > 0 
-                       and d.get('position', 0) * d.get('price', 0) >= MIN_POS_VALUE)
         
         # 每个交易对
         for data in symbols_data:
             symbol = data['symbol']
-            regime = data.get('regime', 'unknown')
+            regime = data.get('regime', '')
             rsi = data.get('rsi', 50)
             price = data.get('price', 0)
             position = data.get('position')
-            signal = data.get('signal', 'hold')
             
             short_name = symbol.replace('/USDT', '')
             
-            # RSI箭头：▲超卖 ▼超买
+            # RSI标记（1字符）
             if rsi < RSI_OVERSOLD:
-                rsi_arrow = '▲'
+                rsi_mark = '▲'
             elif rsi > RSI_OVERBOUGHT:
-                rsi_arrow = '▼'
+                rsi_mark = '▼'
             else:
-                rsi_arrow = ' '
+                rsi_mark = ' '
             
-            # 价格趋势（中文：涨/跌/平）
+            # 趋势（1字）
             if '上涨' in regime or 'bull' in regime.lower():
-                trend_text = '涨'
+                trend = '涨'
             elif '下跌' in regime or 'bear' in regime.lower():
-                trend_text = '跌'
+                trend = '跌'
             else:
-                trend_text = '平'
+                trend = '平'
             
-            # 持仓状态（中文：持/空）
-            has_position = position and position > 0
-            pos_text = '持' if has_position else '空'
+            # 持仓
+            has_position = position and position > 0 and price * position >= MIN_POS_VALUE
+            pos = '持' if has_position else '空'
             
-            # 价格格式化（去掉逗号）
-            price_str = f"${price:>10,.2f}".replace(',', '')
+            # 价格（去掉$，省空间）
+            price_str = f"{price:,.2f}".replace(',', '').replace('$', '')
             
-            # 持仓详情（有持仓时显示：均价、盈亏、止盈止损）
-            pos_detail = ''
+            # 基础行（精简）
+            line = f"{short_name} {price_str} {rsi:.0f}{rsi_mark} {trend}{pos}"
+            
+            # 持仓详情（有持仓时，换行缩进2格）
             if has_position and 'entry_price' in data and data['entry_price']:
+                pos_count += 1
                 ep = data['entry_price']
                 pnl_pct = (price - ep) / ep * 100
-                tp_price = ep * (1 + TARGET_PROFIT_PCT)
-                sl_price = ep * (1 + STOP_LOSS_PCT)
-                pnl_emoji = '📈' if pnl_pct >= 0 else '📉'
+                tp = ep * (1 + TARGET_PROFIT_PCT)
+                sl = ep * (1 + STOP_LOSS_PCT)
                 pnl_sign = '+' if pnl_pct >= 0 else ''
-                pos_detail = f"\n    └ 均价${ep:.6g} 现${price:.6g} {pnl_emoji}{pnl_sign}{pnl_pct:.1f}%  止盈${tp_price:.6g} 止损${sl_price:.6g}"
+                detail = f"  均价{ep:.6g} 现{price:.6g} {pnl_sign}{pnl_pct:.1f}% TP{tp:.6g} SL{sl:.6g}"
+                line = line + "\n" + detail
             
-            lines.append(f"{short_name:<5}{price_str}  RSI{rsi:.0f}{rsi_arrow} {trend_text} {pos_text}{pos_detail}")
+            lines.append(line)
         
         # 统计行
         lines.append("")
-        stats_parts = []
-        if signal_count > 0:
-            stats_parts.append(f"{signal_count}信号")
-        if pos_count > 0:
-            stats_parts.append(f"{pos_count}持仓")
-        if not stats_parts:
-            stats_parts.append("0信号")
-        stats_str = " · ".join(stats_parts)
+        signal_count = sum(1 for d in symbols_data if d.get('signal') in ['buy', 'sell'])
+        stats = f"{signal_count}信号·{pos_count}持仓"
         balance_str = f"🤖 ${usdt_balance:.2f}" if usdt_balance is not None else "🤖 ?"
-        lines.append(f"📊 {stats_str}   {balance_str}")
+        lines.append(f"📊 {stats}  {balance_str}")
         lines.append(f"⏰ {time_str}")
         
         message = "\n".join(lines)
         return self.send_message(message)
-    
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
                               entry_price: float = None, current_price: float = None) -> bool:
@@ -1170,7 +1153,7 @@ def main():
         logger.info("发送启动通知...")
         short_symbols = [s.replace('/USDT', '') for s in SYMBOLS]
         startup_msg = (
-            f"⚡ WorkBuddy 已启动\n"
+            f"Quant Bot 已启动\n"
             f"{LEVERAGE}x·{TIMEFRAME} | {len(short_symbols)}币种 | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}%\n"
             f"{' '.join(short_symbols)}\n"
             f"⏰ {datetime.now().strftime('%m-%d %H:%M')}"
