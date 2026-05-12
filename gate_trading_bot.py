@@ -18,7 +18,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 # ==================== 配置部分 ====================
 import os
@@ -149,6 +149,60 @@ class ExchangeAPI:
         except Exception as e:
             logger.error(f"创建订单失败: symbol={symbol}, side={side}, amount={amount}, error={e}")
             return {}
+
+    def create_limit_sell_order(self, symbol: str, amount: float, price: float) -> Dict:
+        """挂限价卖出单（止盈）"""
+        try:
+            logger.info(f"挂止盈限价单: {symbol} {amount} @ ${price}")
+            order = self.exchange.create_order(symbol, 'limit', 'sell', amount, price)
+            logger.info(f"止盈委托单已挂: {order.get('id', 'N/A')}")
+            return order
+        except Exception as e:
+            logger.error(f"挂止盈单失败: {e}")
+            return {}
+    
+    def create_stop_loss_order(self, symbol: str, amount: float, stop_price: float) -> Dict:
+        """挂止损条件单（止损）"""
+        try:
+            # Gate.io stop-limit order
+            params = {'stopPrice': stop_price}
+            
+            logger.info(f"挂止损条件单: {symbol} {amount} @ stop=${stop_price}")
+            order = self.exchange.create_order(symbol, 'limit', 'sell', amount, stop_price, params)
+            logger.info(f"止损委托单已挂: {order.get('id', 'N/A')}")
+            return order
+        except Exception as e:
+            logger.error(f"挂止损单失败（可能不支持）: {e}")
+            return {}
+    
+    def cancel_order(self, symbol: str, order_id: str) -> bool:
+        """取消指定订单"""
+        try:
+            logger.info(f"取消订单: {symbol} order_id={order_id}")
+            self.exchange.cancel_order(order_id, symbol)
+            logger.info(f"订单已取消: {order_id}")
+            return True
+        except Exception as e:
+            logger.error(f"取消订单失败: {e}")
+            return False
+    
+    def fetch_order(self, symbol: str, order_id: str) -> Dict:
+        """查询订单状态"""
+        try:
+            order = self.exchange.fetch_order(order_id, symbol)
+            return order
+        except Exception as e:
+            logger.error(f"查询订单失败: {e}")
+            return {}
+    
+    def fetch_open_orders(self, symbol: str = None) -> List:
+        """查询未成交委托"""
+        try:
+            orders = self.exchange.fetch_open_orders(symbol)
+            return orders
+        except Exception as e:
+            logger.error(f"查询未成交委托失败: {e}")
+            return []
     
     def get_position(self, symbol: str) -> Dict:
         """获取持仓信息（现货/杠杆通用）"""
@@ -303,6 +357,25 @@ class TechnicalIndicators:
             return df['volume'].rolling(window=period).mean()
         except Exception as e:
             logger.error(f"计算成交量SMA失败: {e}")
+            return pd.Series()
+    
+    @staticmethod
+    def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """计算ATR（平均真实波动幅度）"""
+        try:
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            tr1 = high - low
+            tr2 = abs(high - close.shift(1))
+            tr3 = abs(low - close.shift(1))
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = tr.rolling(window=period).mean()
+            
+            return atr
+        except Exception as e:
+            logger.error(f"计算ATR失败: {e}")
             return pd.Series()
 
 # ==================== 市场状态识别（优化版）====================
@@ -507,7 +580,7 @@ class TelegramNotifier:
         
         # 标题
         lines.append("Quant Bot")
-        lines.append(f"监控{len(symbols_data)}币 | 目标{TARGET_PROFIT_PCT*100:.0f}% 止损{STOP_LOSS_PCT*100:.0f}%")
+        lines.append(f"监控{len(symbols_data)}币 | 动态目标 止损{STOP_LOSS_PCT*100:.0f}%")
         lines.append("")
         
         # 统计
@@ -557,7 +630,8 @@ class TelegramNotifier:
                 if ep:
                     # 有入场价：显示完整详情（精简，避免换行）
                     pnl = (price - ep) / ep * 100
-                    tp = ep * (1 + TARGET_PROFIT_PCT)
+                    dynamic_tp = data.get('dynamic_tp', TARGET_PROFIT_PCT)
+                    tp = ep * (1 + dynamic_tp)
                     sl = ep * (1 + STOP_LOSS_PCT)
                     sign = '+' if pnl >= 0 else ''
                     line += "\n" + f"  成本{ep:.5g} 盈亏{sign}{pnl:.1f}% 出{tp:.5g} 砍{sl:.5g}"
@@ -598,6 +672,8 @@ class TradingStrategy:
         self.entry_time = None
         self.highest_price = None  # 用于追踪止损
         self.last_regime = None
+        self.tp_order_id = None   # 止盈委托单ID
+        self.sl_order_id = None   # 止损委托单ID
         
     def trend_following_strategy(self, regime: str, current_price: float, indicators: Dict) -> str:
         """
@@ -769,12 +845,40 @@ class TradingStrategy:
             
             # 持有
             return 'hold'
-            
+    
         except Exception as e:
             logger.error(f"趋势跟踪策略计算失败: {e}")
             return 'hold'
     
-    def check_take_profit(self, current_price: float) -> bool:
+    def calculate_dynamic_tp(self, df: pd.DataFrame) -> float:
+        """
+        根据ATR计算动态止盈目标
+        
+        ATR占价格比 | 波动等级 | 止盈目标
+        > 2%          | 高波动   | +3%
+        1%~2%         | 中波动   | +2%
+        < 1%          | 低波动   | +1%
+        
+        Returns:
+            止盈比例（如0.02表示+2%）
+        """
+        try:
+            atr = TechnicalIndicators.calculate_atr(df).iloc[-1]
+            current_price = df['close'].iloc[-1]
+            atr_pct = atr / current_price  # ATR占价格百分比
+            
+            # 根据波动率调整止盈目标
+            if atr_pct > 0.02:  # 高波动
+                return 0.03  # +3%
+            elif atr_pct > 0.01:  # 中波动
+                return 0.02  # +2%
+            else:  # 低波动
+                return 0.01  # +1%
+        except Exception as e:
+            logger.error(f"计算动态止盈失败: {e}")
+            return TARGET_PROFIT_PCT  # 失败时使用配置文件的值
+
+    def check_take_profit(self, current_price: float, df: pd.DataFrame = None) -> bool:
         """
         检查止盈条件（新增）
         
@@ -786,8 +890,16 @@ class TradingStrategy:
         
         profit_pct = (current_price - self.entry_price) / self.entry_price
         
-        if profit_pct >= TARGET_PROFIT_PCT:
-            logger.info(f"触发止盈: 入场价={self.entry_price}, 当前价={current_price}, 盈利={profit_pct*100:.2f}%")
+        # 使用动态止盈目标（如果提供了DataFrame）
+        if df is not None:
+            dynamic_tp = self.calculate_dynamic_tp(df)
+            tp_threshold = dynamic_tp
+            logger.debug(f"动态止盈目标: {dynamic_tp*100:.1f}%")
+        else:
+            tp_threshold = TARGET_PROFIT_PCT
+        
+        if profit_pct >= tp_threshold:
+            logger.info(f"触发止盈(动态={tp_threshold*100:.1f}%): 入场价={self.entry_price}, 当前价={current_price}, 盈利={profit_pct*100:.2f}%")
             
             if self.notifier:
                 self.notifier.notify_take_profit(self.symbol, self.entry_price, current_price, profit_pct)
@@ -829,7 +941,7 @@ class TradingStrategy:
         
         return False
     
-    def execute_signal(self, signal: str, current_price: float):
+    def execute_signal(self, signal: str, current_price: float, df: pd.DataFrame = None):
         """执行交易信号（优化版 - 增加详细日志）"""
         try:
             # 检查资金余额（获取现货余额）
@@ -868,6 +980,23 @@ class TradingStrategy:
                     
                     if self.notifier:
                         self.notifier.notify_trade_signal(self.symbol, signal, current_price, '趋势跟踪')
+                    
+                    # 挂止盈止损委托单
+                    dynamic_tp = self.calculate_dynamic_tp(df) if df is not None else TARGET_PROFIT_PCT
+                    tp_price = current_price * (1 + dynamic_tp)
+                    sl_price = current_price * (1 + STOP_LOSS_PCT)
+                    
+                    # 挂止盈限价单
+                    tp_order = self.api.create_limit_sell_order(self.symbol, filled_amount, tp_price)
+                    if tp_order and tp_order.get('id'):
+                        self.tp_order_id = tp_order['id']
+                        logger.info(f"✅ 止盈委托单已挂: {filled_amount:.6f} @ ${tp_price:.5g} (ID={self.tp_order_id})")
+                    
+                    # 挂止损条件单
+                    sl_order = self.api.create_stop_loss_order(self.symbol, filled_amount, sl_price)
+                    if sl_order and sl_order.get('id'):
+                        self.sl_order_id = sl_order['id']
+                        logger.info(f"✅ 止损委托单已挂: {filled_amount:.6f} @ ${sl_price:.5g} (ID={self.sl_order_id})")
                         
             elif signal == 'buy_small':
                 # 小仓位买入 (使用30%可用资金)
@@ -892,6 +1021,23 @@ class TradingStrategy:
                     
                     if self.notifier:
                         self.notifier.notify_trade_signal(self.symbol, signal, current_price, '超卖反弹')
+                    
+                    # 挂止盈止损委托单
+                    dynamic_tp = self.calculate_dynamic_tp(df) if df is not None else TARGET_PROFIT_PCT
+                    tp_price = current_price * (1 + dynamic_tp)
+                    sl_price = current_price * (1 + STOP_LOSS_PCT)
+                    
+                    # 挂止盈限价单
+                    tp_order = self.api.create_limit_sell_order(self.symbol, filled_amount, tp_price)
+                    if tp_order and tp_order.get('id'):
+                        self.tp_order_id = tp_order['id']
+                        logger.info(f"✅ 止盈委托单已挂: {filled_amount:.6f} @ ${tp_price:.5g} (ID={self.tp_order_id})")
+                    
+                    # 挂止损条件单
+                    sl_order = self.api.create_stop_loss_order(self.symbol, filled_amount, sl_price)
+                    if sl_order and sl_order.get('id'):
+                        self.sl_order_id = sl_order['id']
+                        logger.info(f"✅ 止损委托单已挂: {filled_amount:.6f} @ ${sl_price:.5g} (ID={self.sl_order_id})")
                         
             elif signal == 'sell':
                 # 卖出全部持仓
@@ -901,6 +1047,16 @@ class TradingStrategy:
                     
                     # 格式化卖出数量
                     sell_amount = self._format_amount(self.symbol, self.current_position)
+                    
+                    # 先取消止盈止损委托单
+                    if self.tp_order_id:
+                        logger.info(f"卖出前取消止盈委托单: {self.tp_order_id}")
+                        self.api.cancel_order(self.symbol, self.tp_order_id)
+                        self.tp_order_id = None
+                    if self.sl_order_id:
+                        logger.info(f"卖出前取消止损委托单: {self.sl_order_id}")
+                        self.api.cancel_order(self.symbol, self.sl_order_id)
+                        self.sl_order_id = None
                     
                     order = self.api.create_order(self.symbol, 'sell', sell_amount, 'market')
                     if order:
@@ -1044,6 +1200,9 @@ class TradingStrategy:
             else:
                 if self.current_position is not None:
                     logger.info(f"🔄 持仓已清空: {base_currency}")
+                    # 清空委托单ID
+                    self.tp_order_id = None
+                    self.sl_order_id = None
                     self.current_position = None
                     self.entry_price = None
                     
@@ -1057,6 +1216,56 @@ class TradingStrategy:
         try:
             # 0. 从交易所同步实际持仓（解决重启后状态丢失）
             self.sync_position_from_exchange()
+            
+            # 0.5 检查委托单状态（止盈止损）
+            if self.current_position is not None:
+                # 检查止盈委托单是否成交
+                if self.tp_order_id:
+                    try:
+                        tp_order = self.api.fetch_order(self.symbol, self.tp_order_id)
+                        if tp_order and tp_order.get('status') == 'closed':
+                            logger.info(f"🎉 止盈委托单已成交! ID={self.tp_order_id}")
+                            fill_price = float(tp_order.get('average', current_price))
+                            profit_pct = (fill_price - self.entry_price) / self.entry_price
+                            if self.notifier:
+                                self.notifier.notify_take_profit(self.symbol, self.entry_price, fill_price, profit_pct)
+                            # 取消止损委托单
+                            if self.sl_order_id:
+                                self.api.cancel_order(self.symbol, self.sl_order_id)
+                                self.sl_order_id = None
+                            # 清空持仓状态
+                            self.current_position = None
+                            self.entry_price = None
+                            self.entry_time = None
+                            self.highest_price = None
+                            self.tp_order_id = None
+                            return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
+                    except Exception as e:
+                        logger.warning(f"查询止盈委托单失败: {e}")
+                
+                # 检查止损委托单是否成交
+                if self.sl_order_id:
+                    try:
+                        sl_order = self.api.fetch_order(self.symbol, self.sl_order_id)
+                        if sl_order and sl_order.get('status') == 'closed':
+                            logger.info(f"🛑 止损委托单已成交! ID={self.sl_order_id}")
+                            fill_price = float(sl_order.get('average', current_price))
+                            profit_pct = (fill_price - self.entry_price) / self.entry_price
+                            if self.notifier:
+                                self.notifier.notify_stop_loss(self.symbol, self.entry_price, fill_price, profit_pct)
+                            # 取消止盈委托单
+                            if self.tp_order_id:
+                                self.api.cancel_order(self.symbol, self.tp_order_id)
+                                self.tp_order_id = None
+                            # 清空持仓状态
+                            self.current_position = None
+                            self.entry_price = None
+                            self.entry_time = None
+                            self.highest_price = None
+                            self.sl_order_id = None
+                            return {'regime': regime, 'signal': 'stop_loss', 'indicators': indicators}
+                    except Exception as e:
+                        logger.warning(f"查询止损委托单失败: {e}")
             
             # 1. 识别市场状态（用于日志记录和Telegram通知）
             regime, indicators = MarketRegimeDetector.detect_market_regime(df)
@@ -1084,8 +1293,8 @@ class TradingStrategy:
                 return {'regime': regime, 'signal': 'stop_loss', 'indicators': indicators}
             
             # 3. 检查止盈
-            if self.check_take_profit(current_price):
-                self.execute_signal('sell', current_price)
+            if self.check_take_profit(current_price, df):
+                self.execute_signal('sell', current_price, df)
                 return {'regime': regime, 'signal': 'take_profit', 'indicators': indicators}
             
             # 4. 【只用方案A】反转策略（抄底逃顶）
@@ -1094,7 +1303,7 @@ class TradingStrategy:
             
             # 5. 执行交易信号
             if signal != 'hold':
-                self.execute_signal(signal, current_price)
+                self.execute_signal(signal, current_price, df)
                 logger.info(f"✅ {strategy_name} → 执行信号: {signal}")
             else:
                 # 详细日志记录为什么没有交易
@@ -1242,6 +1451,9 @@ def main():
                 indicators = result.get('indicators', {})
                 current_price = df['close'].iloc[-1]
                 
+                # 计算动态止盈目标
+                dynamic_tp = strategy.calculate_dynamic_tp(df)
+                
                 symbols_summary.append({
                     'symbol': symbol,
                     'regime': result.get('regime', 'unknown'),
@@ -1250,7 +1462,8 @@ def main():
                     'price': current_price,
                     'position': result.get('position'),
                     'entry_price': result.get('entry_price'),  # 新增：开仓均价
-                    'signal': result.get('signal', 'hold')
+                    'signal': result.get('signal', 'hold'),
+                    'dynamic_tp': dynamic_tp  # 新增：动态止盈目标
                 })
                 
                 logger.info(f"{symbol} 策略执行完成: 市场状态={result['regime']}, 信号={result['signal']}")
