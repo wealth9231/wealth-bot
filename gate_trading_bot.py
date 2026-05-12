@@ -1048,6 +1048,20 @@ class TradingStrategy:
                     # 格式化卖出数量
                     sell_amount = self._format_amount(self.symbol, self.current_position)
                     
+                    # 🔄 先转账：如果funding账户有余额，转到spot账户（才能卖出）
+                    base_currency = self.symbol.split('/')[0]
+                    try:
+                        funding_balance = self.api.get_balance('funding')
+                        if funding_balance and base_currency in funding_balance:
+                            funding_amount = funding_balance[base_currency].get('free', 0)
+                            if funding_amount > 0:
+                                logger.info(f"🔄 发现{funding_amount:.6f} {base_currency}在funding账户，转到spot账户...")
+                                self.api.exchange.transfer(base_currency, funding_amount, 'funding', 'spot')
+                                logger.info(f"✅ 转账成功: {funding_amount:.6f} {base_currency} funding→spot")
+                                time.sleep(2)  # 等待转账完成
+                    except Exception as te:
+                        logger.warning(f"转账失败（可能不支持）: {te}")
+                    
                     # 先取消止盈止损委托单
                     if self.tp_order_id:
                         logger.info(f"卖出前取消止盈委托单: {self.tp_order_id}")
@@ -1151,7 +1165,7 @@ class TradingStrategy:
             base_currency = self.symbol.split('/')[0]
             
             # 查询所有账户类型
-            account_types = ['spot', 'margin', 'funding', 'future']
+            account_types = ['spot', 'funding', 'future']  # 移除margin（ccxt不支持）
             total_position = 0
             found_in = []
             
