@@ -494,21 +494,21 @@ class TelegramNotifier:
         """
         发送市场状态汇总（手机适配精简版）
         Quant Bot
-        4x·15m | +2% / -2%
-        BTC 80552 50 涨 空
-        DOGE 0.11 55 涨 持
-          均价0.1097 现0.112 +2.1% TP0.112 SL0.107
-        📊 0信号·1持仓 💵 $0.00
-        ⏰ 05-13 02:32
+        杠杆4倍 | 周期15分 | 赚2% 亏2%
+        BTC $80552 RSI37▲ 跌 空
+        DOGE $0.11 RSI55 平 持
+          成本0.1097 现0.112 +2.1%  止盈0.112 止损0.107
+        📊 0信号·1持仓  💵 $0.00
+        时间 05-13 02:32
         """
         from config import RSI_OVERSOLD, RSI_OVERBOUGHT, TARGET_PROFIT_PCT, STOP_LOSS_PCT
         
         time_str = datetime.now().strftime('%m-%d %H:%M')
         lines = []
         
-        # 标题（一行）
+        # 标题
         lines.append("Quant Bot")
-        lines.append(f"{LEVERAGE}x·{TIMEFRAME} | +{TARGET_PROFIT_PCT*100:.0f}% / {STOP_LOSS_PCT*100:.0f}%")
+        lines.append(f"杠杆{LEVERAGE}倍 | 周期{TIMEFRAME} | 赚{TARGET_PROFIT_PCT*100:.0f}% 亏{STOP_LOSS_PCT*100:.0f}%")
         lines.append("")
         
         # 统计
@@ -525,7 +525,7 @@ class TelegramNotifier:
             
             short_name = symbol.replace('/USDT', '')
             
-            # RSI标记（1字符）
+            # RSI标记
             if rsi < RSI_OVERSOLD:
                 rsi_mark = '▲'
             elif rsi > RSI_OVERBOUGHT:
@@ -533,7 +533,7 @@ class TelegramNotifier:
             else:
                 rsi_mark = ' '
             
-            # 趋势（1字）
+            # 趋势
             if '上涨' in regime or 'bull' in regime.lower():
                 trend = '涨'
             elif '下跌' in regime or 'bear' in regime.lower():
@@ -542,24 +542,24 @@ class TelegramNotifier:
                 trend = '平'
             
             # 持仓
-            has_position = position and position > 0 and price * position >= MIN_POS_VALUE
-            pos = '持' if has_position else '空'
+            has_pos = position and position > 0 and price * position >= MIN_POS_VALUE
+            pos_str = '持' if has_pos else '空'
             
-            # 价格（去掉$，省空间）
+            # 价格（去$,去逗号）
             price_str = f"{price:,.2f}".replace(',', '').replace('$', '')
             
-            # 基础行（精简）
-            line = f"{short_name} {price_str} {rsi:.0f}{rsi_mark} {trend}{pos}"
+            # 基础行
+            line = f"{short_name:<5} ${price_str} RSI{rsi:.0f}{rsi_mark} {trend} {pos_str}"
             
-            # 持仓详情（有持仓时，换行缩进2格）
-            if has_position and 'entry_price' in data and data['entry_price']:
+            # 有持仓：加第二行
+            if has_pos and 'entry_price' in data and data['entry_price']:
                 pos_count += 1
                 ep = data['entry_price']
-                pnl_pct = (price - ep) / ep * 100
+                pnl = (price - ep) / ep * 100
                 tp = ep * (1 + TARGET_PROFIT_PCT)
                 sl = ep * (1 + STOP_LOSS_PCT)
-                pnl_sign = '+' if pnl_pct >= 0 else ''
-                detail = f"  均价{ep:.6g} 现{price:.6g} {pnl_sign}{pnl_pct:.1f}% TP{tp:.6g} SL{sl:.6g}"
+                sign = '+' if pnl >= 0 else ''
+                detail = f"  成本{ep:.6g} 现{price:.6g} {sign}{pnl:.1f}%  止盈{tp:.6g} 止损{sl:.6g}"
                 line = line + "\n" + detail
             
             lines.append(line)
@@ -567,13 +567,14 @@ class TelegramNotifier:
         # 统计行
         lines.append("")
         signal_count = sum(1 for d in symbols_data if d.get('signal') in ['buy', 'sell'])
-        stats = f"{signal_count}信号·{pos_count}持仓"
-        balance_str = f"🤖 ${usdt_balance:.2f}" if usdt_balance is not None else "🤖 ?"
+        stats = f"信号{signal_count}个 . 持仓{pos_count}个"
+        balance_str = f"USDT ${usdt_balance:.2f}" if usdt_balance is not None else "USDT ?"
         lines.append(f"📊 {stats}  {balance_str}")
-        lines.append(f"⏰ {time_str}")
+        lines.append(f"时间 {time_str}")
         
         message = "\n".join(lines)
         return self.send_message(message)
+
     def notify_market_regime(self, symbol: str, regime: str, indicators: Dict,
                               current_position: float = None, 
                               entry_price: float = None, current_price: float = None) -> bool:
