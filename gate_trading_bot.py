@@ -1092,10 +1092,27 @@ class TradingStrategy:
                         if self.notifier:
                             self.notifier.notify_trade_signal(self.symbol, signal, current_price, 'unknown')
                         
+                        # 卖出成功后，取消所有剩余委托单（止损单等）
+                        try:
+                            open_orders = self.api.fetch_open_orders(self.symbol)
+                            if open_orders:
+                                logger.info(f"🔄 卖出后清理剩余委托单: {len(open_orders)}个")
+                                for oo in open_orders:
+                                    try:
+                                        self.api.cancel_order(self.symbol, oo['id'])
+                                        logger.info(f"✅ 取消剩余委托单: ID={oo['id']}")
+                                    except Exception as ce:
+                                        logger.warning(f"取消剩余委托单失败: {ce}")
+                        except Exception as e:
+                            logger.warning(f"查询剩余委托单失败: {e}")
+                        
+                        # 清空所有状态
                         self.current_position = None
                         self.entry_price = None
                         self.entry_time = None
                         self.highest_price = None
+                        self.tp_order_id = None
+                        self.sl_order_id = None
                         
         except Exception as e:
             logger.error(f"执行交易信号失败: {e}")
