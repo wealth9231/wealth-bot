@@ -1551,12 +1551,18 @@ def main():
     logger.info("Gate.io 量化交易机器人启动 (优化版)")
     logger.info("=" * 50)
     
-    # 1. 初始化交易所API（优化版 - 支持杠杆）
-    try:
-        api = ExchangeAPI(GATEIO_API_KEY, GATEIO_API_SECRET)
-    except Exception as e:
-        logger.error(f"交易所API初始化失败: {e}")
-        return
+    # 1. 初始化交易所API（支持虚拟/真实切换）
+    if USE_VIRTUAL_EXCHANGE:
+        logger.info("🎯 使用虚拟交易所（模拟交易）")
+        from virtual_exchange import VirtualExchangeAPI
+        api = VirtualExchangeAPI(initial_usdt=VIRTUAL_INITIAL_USDT, fee_rate=VIRTUAL_FEE_RATE)
+        logger.info(f"🎯 虚拟资金: ${VIRTUAL_INITIAL_USDT:.2f} USDT")
+    else:
+        try:
+            api = ExchangeAPI(GATEIO_API_KEY, GATEIO_API_SECRET)
+        except Exception as e:
+            logger.error(f"交易所API初始化失败: {e}")
+            return
     
     # 2. 初始化Telegram通知器
     notifier = None
@@ -1655,12 +1661,23 @@ def main():
         if notifier and symbols_summary:
             notifier.notify_market_summary(symbols_summary, usdt_balance)
         
+        # 虚拟交易所模式：打印交易统计
+        if USE_VIRTUAL_EXCHANGE:
+            api.print_statistics()
+        
         logger.info("本次执行完成，等待下次触发...")
             
     except Exception as e:
         logger.error(f"执行发生错误: {e}")
         if notifier:
             notifier.notify_error(f"执行发生错误: {e}")
+        
+        # 虚拟交易所模式：异常时也打印统计
+        if USE_VIRTUAL_EXCHANGE:
+            try:
+                api.print_statistics()
+            except:
+                pass
         raise
 
 if __name__ == "__main__":

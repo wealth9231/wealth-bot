@@ -42,3 +42,9 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '6204659239')
 # 验证：确保使用正确的 Bot
 # Bot Username: @GateWoBuy_bot
 # Bot Token: 8746796223:AAGR4wryx4Zj4TARb9yeC83KOqJQJThTzMo
+
+# ==================== 虚拟交易所配置 ====================
+# 是否使用虚拟交易所（True=虚拟交易，False=真实交易）
+USE_VIRTUAL_EXCHANGE = os.getenv('USE_VIRTUAL_EXCHANGE', 'False').lower() == 'true'
+VIRTUAL_INITIAL_USDT = float(os.getenv('VIRTUAL_INITIAL_USDT', '1000'))  # 初始虚拟资金
+VIRTUAL_FEE_RATE = 0.001  # 手续费（0.1%，与Gate.io一致）
