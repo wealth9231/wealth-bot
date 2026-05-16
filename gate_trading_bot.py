@@ -1657,9 +1657,23 @@ def main():
                 
                 logger.info(f"{symbol} 策略执行完成: 市场状态={result['regime']}, 信号={result['signal']}")
         
-        # 发送汇总通知
-        if notifier and symbols_summary:
-            notifier.notify_market_summary(symbols_summary, usdt_balance)
+        # 发送汇总通知（保底机制：确保每次运行都发通知）
+        if notifier:
+            if symbols_summary:
+                success = notifier.notify_market_summary(symbols_summary, usdt_balance)
+                if success:
+                    logger.info(f"✅ Telegram通知已发送: {len(symbols_summary)}个币种")
+                else:
+                    logger.error(f"❌ Telegram通知发送失败")
+            else:
+                logger.warning(f"⚠️ 没有汇总数据，发送空运行通知")
+                # 保底：即使没有数据也发一条通知
+                try:
+                    notifier.send_message(f"⏰ 定时运行\n时间: {datetime.now().strftime('%m-%d %H:%M')}\n状态: 运行完成，无交易信号")
+                except Exception as e:
+                    logger.error(f"保底通知发送失败: {e}")
+        else:
+            logger.warning(f"⚠️ notifier为None，无法发送通知")
         
         # 虚拟交易所模式：打印交易统计
         if USE_VIRTUAL_EXCHANGE:
